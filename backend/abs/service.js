@@ -475,6 +475,23 @@ function scheduleBatchesWithPAR(
 }
 
 /**
+ * Get default schedule generation parameters
+ * @returns {Object} Default parameters for schedule generation
+ */
+export function getDefaultScheduleParams() {
+  return {
+    restockThreshold: ABS_DEFAULTS.SCHEDULE_GENERATION.RESTOCK_THRESHOLD,
+    targetEndInventory: ABS_DEFAULTS.SCHEDULE_GENERATION.TARGET_END_INVENTORY,
+    forecastParams: {
+      growthRate: ABS_DEFAULTS.SCHEDULE_GENERATION.FORECAST_GROWTH_RATE,
+      lookbackWeeks: ABS_DEFAULTS.SCHEDULE_GENERATION.FORECAST_LOOKBACK_WEEKS,
+      timeIntervalMinutes:
+        ABS_DEFAULTS.SCHEDULE_GENERATION.TIME_INTERVAL_MINUTES,
+    },
+  };
+}
+
+/**
  * Schedule batches into oven racks
  * @param {Array} batches - Array of batch objects
  * @param {Date} date - Schedule date
@@ -612,6 +629,16 @@ export async function generateSchedule(params) {
     throw new Error("Date is required");
   }
 
+  // Get defaults and merge with provided parameters
+  const defaults = getDefaultScheduleParams();
+  const finalForecastParams = {
+    ...defaults.forecastParams,
+    ...(forecastParams || {}),
+  };
+  const finalRestockThreshold = restockThreshold ?? defaults.restockThreshold;
+  const finalTargetEndInventory =
+    targetEndInventory ?? defaults.targetEndInventory;
+
   const dateStr =
     typeof date === "string" ? date : format(parseISO(date), "yyyy-MM-dd");
 
@@ -633,9 +660,9 @@ export async function generateSchedule(params) {
     startDate: dateStr,
     endDate: dateStr,
     increment: "day",
-    growthRate: forecastParams?.growthRate || 1.0,
-    lookbackWeeks: forecastParams?.lookbackWeeks || 4,
-    timeIntervalMinutes: forecastParams?.timeIntervalMinutes || 10,
+    growthRate: finalForecastParams.growthRate,
+    lookbackWeeks: finalForecastParams.lookbackWeeks,
+    timeIntervalMinutes: finalForecastParams.timeIntervalMinutes,
   });
 
   if (
@@ -698,7 +725,7 @@ export async function generateSchedule(params) {
     const effectiveRestockThreshold =
       bakeSpec.restockThreshold !== undefined
         ? bakeSpec.restockThreshold
-        : restockThreshold || ABS_DEFAULTS.RESTOCK_THRESHOLD;
+        : finalRestockThreshold;
 
     try {
       const batches = calculateBatches(
@@ -796,10 +823,9 @@ export async function generateSchedule(params) {
     timeIntervalForecast: forecastData.timeIntervalForecast || [],
     parConfig: parConfig,
     parameters: {
-      restockThreshold: restockThreshold || ABS_DEFAULTS.RESTOCK_THRESHOLD,
-      targetEndInventory:
-        targetEndInventory || ABS_DEFAULTS.TARGET_END_INVENTORY,
-      forecastParams: forecastParams || {},
+      restockThreshold: finalRestockThreshold,
+      targetEndInventory: finalTargetEndInventory,
+      forecastParams: finalForecastParams,
     },
   };
 

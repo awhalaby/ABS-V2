@@ -42,6 +42,14 @@ export const ABS_DEFAULTS = {
   TARGET_END_INVENTORY: 5,
   SIMULATION_SPEEDS: [30, 60, 90, 120], // speed multipliers
   DEFAULT_SIMULATION_SPEED: 60,
+  // Schedule generation defaults
+  SCHEDULE_GENERATION: {
+    RESTOCK_THRESHOLD: 12,
+    TARGET_END_INVENTORY: 5,
+    FORECAST_GROWTH_RATE: 1.0,
+    FORECAST_LOOKBACK_WEEKS: 4,
+    TIME_INTERVAL_MINUTES: 10,
+  },
 };
 
 // Database collection names

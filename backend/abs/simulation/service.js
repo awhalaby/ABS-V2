@@ -4,11 +4,11 @@ import {
   formatMinutesToTime,
   addMinutesToTime,
 } from "../../shared/utils/timeUtils.js";
-import { BUSINESS_HOURS, ABS_DEFAULTS } from "../../config/constants.js";
+import { BUSINESS_HOURS } from "../../config/constants.js";
 import { v4 as uuidv4 } from "uuid";
 import { getOrdersByDateRange } from "../../orders/repository.js";
 import { toBusinessTime } from "../../config/timezone.js";
-import { generateSchedule } from "../service.js";
+import { generateSchedule, getDefaultScheduleParams } from "../service.js";
 
 /**
  * Simulation Service - Runs schedule simulations in real-time
@@ -119,14 +119,10 @@ export async function startSimulation(config) {
   if (!schedule) {
     // Auto-generate schedule with default parameters
     try {
+      const defaultParams = getDefaultScheduleParams();
       schedule = await generateSchedule({
         date: scheduleDate,
-        forecastParams: {
-          growthRate: 1.0,
-          lookbackWeeks: 4,
-        },
-        restockThreshold: ABS_DEFAULTS.RESTOCK_THRESHOLD,
-        targetEndInventory: ABS_DEFAULTS.TARGET_END_INVENTORY,
+        ...defaultParams,
       });
     } catch (error) {
       throw new Error(

@@ -397,72 +397,73 @@ export default function SimulationPage() {
       {/* Simulation Status */}
       {simulation && (
         <div className="space-y-6">
-          {/* Current Status */}
-          <div className="bg-white shadow rounded-lg p-6">
-            <h3 className="text-lg font-medium text-gray-900 mb-4">
-              Simulation Status
-            </h3>
-            <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
-              <div>
-                <p className="text-sm text-gray-500">Status</p>
-                <p className="text-2xl font-bold text-gray-900 capitalize">
-                  {simulation.status}
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Current Time</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {simulation.currentTime || "--:--"}
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Speed</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {simulation.speedMultiplier || speedMultiplier}x
-                </p>
-              </div>
-              <div>
-                <p className="text-sm text-gray-500">Total Inventory</p>
-                <p className="text-2xl font-bold text-gray-900">
-                  {formatNumber(simulation.stats?.totalInventory || 0)}
-                </p>
-              </div>
-            </div>
-          </div>
-
-          {/* Statistics */}
-          {simulation.stats && (
+          {/* Top Row: Status and Statistics Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Current Status */}
             <div className="bg-white shadow rounded-lg p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Statistics
+                Simulation Status
               </h3>
-              <div className="grid grid-cols-2 md:grid-cols-5 gap-4">
+              <div className="grid grid-cols-2 gap-4">
                 <div>
-                  <p className="text-sm text-gray-500">Batches Started</p>
-                  <p className="text-xl font-bold text-gray-900">
-                    {formatNumber(simulation.stats.batchesStarted || 0)}
+                  <p className="text-sm text-gray-500">Status</p>
+                  <p className="text-2xl font-bold text-gray-900 capitalize">
+                    {simulation.status}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Batches Pulled</p>
-                  <p className="text-xl font-bold text-yellow-600">
-                    {formatNumber(simulation.stats.batchesPulled || 0)}
+                  <p className="text-sm text-gray-500">Current Time</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {simulation.currentTime || "--:--"}
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Batches Available</p>
-                  <p className="text-xl font-bold text-green-600">
-                    {formatNumber(simulation.stats.batchesAvailable || 0)}
+                  <p className="text-sm text-gray-500">Speed</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {simulation.speedMultiplier || speedMultiplier}x
                   </p>
                 </div>
                 <div>
-                  <p className="text-sm text-gray-500">Peak Inventory</p>
-                  <p className="text-xl font-bold text-blue-600">
-                    {formatNumber(simulation.stats.peakInventory || 0)}
+                  <p className="text-sm text-gray-500">Total Inventory</p>
+                  <p className="text-2xl font-bold text-gray-900">
+                    {formatNumber(simulation.stats?.totalInventory || 0)}
                   </p>
                 </div>
-                {simulation.mode === "preset" && (
-                  <>
+              </div>
+            </div>
+
+            {/* Statistics */}
+            {simulation.stats && (
+              <div className="bg-white shadow rounded-lg p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">
+                  Statistics
+                </h3>
+                <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                  <div>
+                    <p className="text-sm text-gray-500">Batches Started</p>
+                    <p className="text-xl font-bold text-gray-900">
+                      {formatNumber(simulation.stats.batchesStarted || 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Batches Pulled</p>
+                    <p className="text-xl font-bold text-yellow-600">
+                      {formatNumber(simulation.stats.batchesPulled || 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Batches Available</p>
+                    <p className="text-xl font-bold text-green-600">
+                      {formatNumber(simulation.stats.batchesAvailable || 0)}
+                    </p>
+                  </div>
+                  <div>
+                    <p className="text-sm text-gray-500">Peak Inventory</p>
+                    <p className="text-xl font-bold text-blue-600">
+                      {formatNumber(simulation.stats.peakInventory || 0)}
+                    </p>
+                  </div>
+                  {simulation.mode === "preset" && (
                     <div>
                       <p className="text-sm text-gray-500">Orders Processed</p>
                       <p className="text-xl font-bold text-green-600">
@@ -470,56 +471,68 @@ export default function SimulationPage() {
                         {formatNumber(simulation.stats.ordersTotal || 0)}
                       </p>
                     </div>
-                  </>
-                )}
-                <div>
-                  <p className="text-sm text-gray-500">Active Batches</p>
-                  <p className="text-xl font-bold text-gray-900">
-                    {formatNumber(simulation.batches?.length || 0)}
-                  </p>
-                </div>
-              </div>
-            </div>
-          )}
-
-          {/* Expected Orders / Forecast */}
-          {(simulation.forecast || simulation.timeIntervalForecast) && (
-            <ExpectedOrders
-              forecast={simulation.forecast || []}
-              timeIntervalForecast={simulation.timeIntervalForecast || []}
-            />
-          )}
-
-          {/* Actual Orders */}
-          <ActualOrders
-            processedOrdersByItem={simulation.processedOrdersByItem || []}
-          />
-
-          {/* Inventory */}
-          {simulation.inventory &&
-            Object.keys(simulation.inventory).length > 0 && (
-              <div className="bg-white shadow rounded-lg p-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">
-                  Current Inventory
-                </h3>
-                <div className="grid grid-cols-2 md:grid-cols-4 gap-4">
-                  {Object.entries(simulation.inventory).map(
-                    ([itemGuid, quantity]) => (
-                      <div key={itemGuid} className="border rounded-lg p-3">
-                        <p className="text-sm text-gray-500 truncate">
-                          {itemGuid}
-                        </p>
-                        <p className="text-xl font-bold text-gray-900">
-                          {formatNumber(quantity)}
-                        </p>
-                      </div>
-                    )
                   )}
+                  <div>
+                    <p className="text-sm text-gray-500">Active Batches</p>
+                    <p className="text-xl font-bold text-gray-900">
+                      {formatNumber(simulation.batches?.length || 0)}
+                    </p>
+                  </div>
                 </div>
               </div>
             )}
+          </div>
 
-          {/* Batches Timeline View (Active + Completed) */}
+          {/* Second Row: Expected and Actual Orders Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Expected Orders / Forecast */}
+            {(simulation.forecast || simulation.timeIntervalForecast) && (
+              <ExpectedOrders
+                forecast={simulation.forecast || []}
+                timeIntervalForecast={simulation.timeIntervalForecast || []}
+              />
+            )}
+
+            {/* Actual Orders */}
+            <ActualOrders
+              processedOrdersByItem={simulation.processedOrdersByItem || []}
+            />
+          </div>
+
+          {/* Third Row: Inventory and Stockouts Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Inventory */}
+            {simulation.inventory &&
+              Object.keys(simulation.inventory).length > 0 && (
+                <div className="bg-white shadow rounded-lg p-6">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">
+                    Current Inventory
+                  </h3>
+                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
+                    {Object.entries(simulation.inventory).map(
+                      ([itemGuid, quantity]) => (
+                        <div key={itemGuid} className="border rounded-lg p-3">
+                          <p className="text-sm text-gray-500 truncate">
+                            {itemGuid}
+                          </p>
+                          <p className="text-xl font-bold text-gray-900">
+                            {formatNumber(quantity)}
+                          </p>
+                        </div>
+                      )
+                    )}
+                  </div>
+                </div>
+              )}
+
+            {/* Stockouts & Missed Orders */}
+            <Stockout
+              missedOrders={simulation.missedOrders || []}
+              events={simulation.recentEvents || []}
+            />
+          </div>
+
+          {/* Fourth Row: Batches Timeline (Full Width) */}
           {((simulation.batches && simulation.batches.length > 0) ||
             (simulation.completedBatches &&
               simulation.completedBatches.length > 0)) && (
@@ -546,137 +559,134 @@ export default function SimulationPage() {
             </div>
           )}
 
-          {/* Stockouts & Missed Orders */}
-          <Stockout
-            missedOrders={simulation.missedOrders || []}
-            events={simulation.recentEvents || []}
-          />
-
-          {/* Recent Events */}
-          {simulation.recentEvents && simulation.recentEvents.length > 0 && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Recent Events
-              </h3>
-              <div className="space-y-2 max-h-64 overflow-y-auto">
-                {simulation.recentEvents
-                  .slice()
-                  .reverse()
-                  .map((event, idx) => (
-                    <div
-                      key={idx}
-                      className="flex items-start gap-3 text-sm border-b pb-2"
-                    >
-                      <span className="text-gray-500 font-mono">
-                        {event.timeString}
-                      </span>
-                      <span className="flex-1 text-gray-900">
-                        {event.message}
-                      </span>
-                    </div>
-                  ))}
+          {/* Fifth Row: POS/Order Status and Recent Events Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* POS - Point of Sale (Manual Mode Only) */}
+            {simulation.mode === "manual" && (
+              <div className="bg-white shadow rounded-lg p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">
+                  Point of Sale
+                </h3>
+                {availableItems.length === 0 ? (
+                  <div className="text-center py-8 text-gray-500">
+                    No items available for purchase yet. Wait for batches to
+                    become available.
+                  </div>
+                ) : (
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    {availableItems.map((item) => (
+                      <div
+                        key={item.itemGuid}
+                        className="border rounded-lg p-4 hover:shadow-md transition-shadow"
+                      >
+                        <div className="flex justify-between items-start mb-3">
+                          <h4 className="font-medium text-gray-900">
+                            {item.displayName || item.itemGuid}
+                          </h4>
+                          <span className="text-sm font-bold text-blue-600">
+                            {formatNumber(item.quantity)} available
+                          </span>
+                        </div>
+                        <div className="flex gap-2">
+                          <button
+                            onClick={() => handlePurchase(item.itemGuid, 1)}
+                            disabled={purchasing || item.quantity < 1}
+                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                          >
+                            Buy 1
+                          </button>
+                          <button
+                            onClick={() => handlePurchase(item.itemGuid, 3)}
+                            disabled={purchasing || item.quantity < 3}
+                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                          >
+                            Buy 3
+                          </button>
+                          <button
+                            onClick={() => handlePurchase(item.itemGuid, 6)}
+                            disabled={purchasing || item.quantity < 6}
+                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                          >
+                            Buy 6
+                          </button>
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
               </div>
-            </div>
-          )}
+            )}
 
-          {/* POS - Point of Sale (Manual Mode Only) */}
-          {simulation.mode === "manual" && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Point of Sale
-              </h3>
-              {availableItems.length === 0 ? (
-                <div className="text-center py-8 text-gray-500">
-                  No items available for purchase yet. Wait for batches to
-                  become available.
-                </div>
-              ) : (
-                <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-4">
-                  {availableItems.map((item) => (
+            {/* Order Processing Status (Preset Mode Only) */}
+            {simulation.mode === "preset" && (
+              <div className="bg-white shadow rounded-lg p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">
+                  Order Processing Status
+                </h3>
+                <div className="space-y-2">
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">Total Orders</span>
+                    <span className="text-lg font-bold text-gray-900">
+                      {formatNumber(simulation.stats.ordersTotal || 0)}
+                    </span>
+                  </div>
+                  <div className="flex justify-between items-center">
+                    <span className="text-sm text-gray-600">
+                      Orders Processed
+                    </span>
+                    <span className="text-lg font-bold text-green-600">
+                      {formatNumber(simulation.stats.ordersProcessed || 0)}
+                    </span>
+                  </div>
+                  <div className="w-full bg-gray-200 rounded-full h-2.5 mt-4">
                     <div
-                      key={item.itemGuid}
-                      className="border rounded-lg p-4 hover:shadow-md transition-shadow"
-                    >
-                      <div className="flex justify-between items-start mb-3">
-                        <h4 className="font-medium text-gray-900">
-                          {item.displayName || item.itemGuid}
-                        </h4>
-                        <span className="text-sm font-bold text-blue-600">
-                          {formatNumber(item.quantity)} available
+                      className="bg-green-600 h-2.5 rounded-full transition-all"
+                      style={{
+                        width: `${
+                          simulation.stats.ordersTotal > 0
+                            ? (simulation.stats.ordersProcessed /
+                                simulation.stats.ordersTotal) *
+                              100
+                            : 0
+                        }%`,
+                      }}
+                    ></div>
+                  </div>
+                  <p className="text-xs text-gray-500 mt-2">
+                    Orders are automatically processed when inventory becomes
+                    available. Missed orders are logged in Recent Events.
+                  </p>
+                </div>
+              </div>
+            )}
+
+            {/* Recent Events */}
+            {simulation.recentEvents && simulation.recentEvents.length > 0 && (
+              <div className="bg-white shadow rounded-lg p-6">
+                <h3 className="text-lg font-medium text-gray-900 mb-4">
+                  Recent Events
+                </h3>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {simulation.recentEvents
+                    .slice()
+                    .reverse()
+                    .map((event, idx) => (
+                      <div
+                        key={idx}
+                        className="flex items-start gap-3 text-sm border-b pb-2"
+                      >
+                        <span className="text-gray-500 font-mono">
+                          {event.timeString}
+                        </span>
+                        <span className="flex-1 text-gray-900">
+                          {event.message}
                         </span>
                       </div>
-                      <div className="flex gap-2">
-                        <button
-                          onClick={() => handlePurchase(item.itemGuid, 1)}
-                          disabled={purchasing || item.quantity < 1}
-                          className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                        >
-                          Buy 1
-                        </button>
-                        <button
-                          onClick={() => handlePurchase(item.itemGuid, 3)}
-                          disabled={purchasing || item.quantity < 3}
-                          className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                        >
-                          Buy 3
-                        </button>
-                        <button
-                          onClick={() => handlePurchase(item.itemGuid, 6)}
-                          disabled={purchasing || item.quantity < 6}
-                          className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                        >
-                          Buy 6
-                        </button>
-                      </div>
-                    </div>
-                  ))}
+                    ))}
                 </div>
-              )}
-            </div>
-          )}
-
-          {/* Order Processing Status (Preset Mode Only) */}
-          {simulation.mode === "preset" && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Order Processing Status
-              </h3>
-              <div className="space-y-2">
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">Total Orders</span>
-                  <span className="text-lg font-bold text-gray-900">
-                    {formatNumber(simulation.stats.ordersTotal || 0)}
-                  </span>
-                </div>
-                <div className="flex justify-between items-center">
-                  <span className="text-sm text-gray-600">
-                    Orders Processed
-                  </span>
-                  <span className="text-lg font-bold text-green-600">
-                    {formatNumber(simulation.stats.ordersProcessed || 0)}
-                  </span>
-                </div>
-                <div className="w-full bg-gray-200 rounded-full h-2.5 mt-4">
-                  <div
-                    className="bg-green-600 h-2.5 rounded-full transition-all"
-                    style={{
-                      width: `${
-                        simulation.stats.ordersTotal > 0
-                          ? (simulation.stats.ordersProcessed /
-                              simulation.stats.ordersTotal) *
-                            100
-                          : 0
-                      }%`,
-                    }}
-                  ></div>
-                </div>
-                <p className="text-xs text-gray-500 mt-2">
-                  Orders are automatically processed when inventory becomes
-                  available. Missed orders are logged in Recent Events.
-                </p>
               </div>
-            </div>
-          )}
+            )}
+          </div>
 
           {/* Batches Table (Active + Completed) */}
           {((simulation.batches && simulation.batches.length > 0) ||

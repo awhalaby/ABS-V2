@@ -121,24 +121,6 @@ export default function ExpectedOrders({
             {formatNumber(forecastSummary.totalQuantity)}
           </p>
         </div>
-        <div className="bg-green-50 border border-green-200 rounded-lg p-4">
-          <p className="text-sm text-green-700 font-medium mb-1">
-            Number of Items
-          </p>
-          <p className="text-2xl font-bold text-green-900">
-            {formatNumber(forecastSummary.totalItems)}
-          </p>
-        </div>
-        {timeIntervalSummary && timeIntervalSummary.length > 0 && (
-          <div className="bg-purple-50 border border-purple-200 rounded-lg p-4">
-            <p className="text-sm text-purple-700 font-medium mb-1">
-              Time Intervals
-            </p>
-            <p className="text-2xl font-bold text-purple-900">
-              {formatNumber(timeIntervalSummary.length)}
-            </p>
-          </div>
-        )}
       </div>
 
       {/* Items Breakdown */}
