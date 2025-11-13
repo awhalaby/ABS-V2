@@ -179,3 +179,27 @@ export async function updateScheduleBatch(scheduleId, batchId, updates) {
 
   return { modifiedCount: result.modifiedCount };
 }
+
+/**
+ * Delete a batch from schedule
+ * @param {string} scheduleId - Schedule ID
+ * @param {string} batchId - Batch ID
+ * @returns {Promise<Object>} Delete result
+ */
+export async function deleteScheduleBatch(scheduleId, batchId) {
+  const collection = getCollection(COLLECTIONS.ABS_SCHEDULES);
+
+  const result = await collection.updateOne(
+    { _id: scheduleId },
+    {
+      $pull: {
+        batches: { batchId: batchId },
+      },
+      $set: {
+        updatedAt: new Date(),
+      },
+    }
+  );
+
+  return { modifiedCount: result.modifiedCount };
+}

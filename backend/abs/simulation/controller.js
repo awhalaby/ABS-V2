@@ -402,7 +402,7 @@ export const deleteSimulationBatchController = asyncHandler(
       });
     }
 
-    const simulation = deleteSimulationBatch(id, batchId);
+    const simulation = await deleteSimulationBatch(id, batchId);
     if (!simulation) {
       return res.status(404).json({
         success: false,

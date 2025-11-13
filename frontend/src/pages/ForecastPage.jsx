@@ -172,73 +172,92 @@ export default function ForecastPage() {
           </div>
 
           {/* Historical vs Forecast Comparison */}
-          {forecastData.dailyForecast && (
-            <div className="bg-white shadow rounded-lg p-6">
-              <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Historical Average vs Forecast
-              </h3>
-              <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
-                    Historical Patterns
-                  </h4>
-                  <div className="space-y-2">
-                    {forecastData.dailyForecast
-                      .slice(0, 10)
-                      .map((record, idx) => (
-                        <div
-                          key={idx}
-                          className="flex justify-between text-sm border-b pb-2"
-                        >
-                          <span>{record.displayName || record.sku}</span>
-                          <span className="text-gray-600">
-                            Avg: {formatNumber(Math.round(record.baseAverage))}
-                          </span>
-                        </div>
-                      ))}
-                  </div>
-                </div>
-                <div>
-                  <h4 className="text-sm font-medium text-gray-700 mb-2">
-                    Forecast Preview
-                  </h4>
-                  <div className="space-y-2">
-                    {forecastData.dailyForecast
-                      .slice(0, 10)
-                      .map((record, idx) => {
-                        const growth =
-                          record.baseAverage > 0
-                            ? ((record.forecast - record.baseAverage) /
-                                record.baseAverage) *
-                              100
-                            : 0;
-                        return (
+          {forecastData.dailyForecast &&
+            (() => {
+              // Group by SKU to avoid duplicates (since dailyForecast has one record per SKU per day)
+              const skuMap = new Map();
+              forecastData.dailyForecast.forEach((record) => {
+                const skuKey =
+                  record.itemGuid || record.displayName || record.sku;
+                if (!skuMap.has(skuKey)) {
+                  skuMap.set(skuKey, {
+                    sku: skuKey,
+                    displayName: record.displayName || record.sku,
+                    baseAverage: record.baseAverage,
+                    // Use first day's forecast for preview, or aggregate if preferred
+                    forecast: record.forecast,
+                    date: record.date,
+                  });
+                }
+              });
+
+              const uniqueSkus = Array.from(skuMap.values()).slice(0, 10);
+
+              return (
+                <div className="bg-white shadow rounded-lg p-6">
+                  <h3 className="text-lg font-medium text-gray-900 mb-4">
+                    Historical Average vs Forecast
+                  </h3>
+                  <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-700 mb-2">
+                        Historical Patterns
+                      </h4>
+                      <div className="space-y-2">
+                        {uniqueSkus.map((record) => (
                           <div
-                            key={idx}
+                            key={record.sku}
                             className="flex justify-between text-sm border-b pb-2"
                           >
                             <span>{record.displayName || record.sku}</span>
-                            <span
-                              className={
-                                growth > 0
-                                  ? "text-green-600"
-                                  : growth < 0
-                                  ? "text-red-600"
-                                  : "text-gray-600"
-                              }
-                            >
-                              {formatNumber(record.forecast)} (
-                              {growth > 0 ? "+" : ""}
-                              {formatPercent(growth / 100)})
+                            <span className="text-gray-600">
+                              Avg:{" "}
+                              {formatNumber(Math.round(record.baseAverage))}
                             </span>
                           </div>
-                        );
-                      })}
+                        ))}
+                      </div>
+                    </div>
+                    <div>
+                      <h4 className="text-sm font-medium text-gray-700 mb-2">
+                        Forecast Preview
+                      </h4>
+                      <div className="space-y-2">
+                        {uniqueSkus.map((record) => {
+                          const growth =
+                            record.baseAverage > 0
+                              ? ((record.forecast - record.baseAverage) /
+                                  record.baseAverage) *
+                                100
+                              : 0;
+                          return (
+                            <div
+                              key={record.sku}
+                              className="flex justify-between text-sm border-b pb-2"
+                            >
+                              <span>{record.displayName || record.sku}</span>
+                              <span
+                                className={
+                                  growth > 0
+                                    ? "text-green-600"
+                                    : growth < 0
+                                    ? "text-red-600"
+                                    : "text-gray-600"
+                                }
+                              >
+                                {formatNumber(record.forecast)} (
+                                {growth > 0 ? "+" : ""}
+                                {formatPercent(growth / 100)})
+                              </span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    </div>
                   </div>
                 </div>
-              </div>
-            </div>
-          )}
+              );
+            })()}
         </div>
       )}
 

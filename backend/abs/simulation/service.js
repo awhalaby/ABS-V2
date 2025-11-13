@@ -691,9 +691,9 @@ export async function moveSimulationBatch(
  * Delete a batch from simulation
  * @param {string} simulationId - Simulation ID
  * @param {string} batchId - Batch ID
- * @returns {SimulationState|null} Updated simulation state
+ * @returns {Promise<SimulationState|null>} Updated simulation state
  */
-export function deleteSimulationBatch(simulationId, batchId) {
+export async function deleteSimulationBatch(simulationId, batchId) {
   const simulation = activeSimulations.get(simulationId);
   if (!simulation) {
     return null;
@@ -711,6 +711,21 @@ export function deleteSimulationBatch(simulationId, batchId) {
     }
     const batch = simulation.completedBatches[completedIndex];
     simulation.completedBatches.splice(completedIndex, 1);
+
+    // Delete batch from database schedule
+    if (simulation.scheduleId) {
+      try {
+        await deleteScheduleBatch(simulation.scheduleId, batchId);
+      } catch (error) {
+        console.error("Failed to delete batch from database:", error);
+        simulation.addEvent(
+          "batch_delete_error",
+          `Failed to delete batch from database: ${error.message}`,
+          { batchId, error: error.message }
+        );
+      }
+    }
+
     simulation.addEvent(
       "batch_deleted",
       `Batch deleted: ${batch.displayName || batch.itemGuid}`,
@@ -728,8 +743,23 @@ export function deleteSimulationBatch(simulationId, batchId) {
 
   const batch = simulation.batches[batchIndex];
 
-  // Remove batch
+  // Remove batch from simulation state
   simulation.batches.splice(batchIndex, 1);
+
+  // Delete batch from database schedule
+  if (simulation.scheduleId) {
+    try {
+      await deleteScheduleBatch(simulation.scheduleId, batchId);
+    } catch (error) {
+      // Log error but don't fail the simulation update
+      console.error("Failed to delete batch from database:", error);
+      simulation.addEvent(
+        "batch_delete_error",
+        `Failed to delete batch from database: ${error.message}`,
+        { batchId, error: error.message }
+      );
+    }
+  }
 
   // Log deletion event
   simulation.addEvent(
