@@ -1,7 +1,6 @@
 import { getCollection } from "../config/database.js";
 import { COLLECTIONS } from "../config/constants.js";
 import { startOfBusinessDay, endOfBusinessDay } from "../config/timezone.js";
-import { parseISO } from "date-fns";
 
 /**
  * Orders repository - Database queries for orders
@@ -150,45 +149,13 @@ export async function findDateRanges() {
 
   const dates = await collection.aggregate(pipeline).toArray();
 
-  // Group consecutive dates into ranges
-  const ranges = [];
-  let currentRange = null;
-
-  for (const dateEntry of dates) {
-    const date = parseISO(dateEntry.date + "T00:00:00");
-
-    if (!currentRange) {
-      currentRange = {
-        startDate: dateEntry.date,
-        endDate: dateEntry.date,
-        orderCount: dateEntry.orderCount,
-        itemCount: dateEntry.itemCount,
-      };
-    } else {
-      const prevDate = parseISO(currentRange.endDate + "T00:00:00");
-      const daysDiff = Math.floor((prevDate - date) / (1000 * 60 * 60 * 24));
-
-      if (daysDiff === 1) {
-        // Consecutive date, extend range
-        currentRange.startDate = dateEntry.date;
-        currentRange.orderCount += dateEntry.orderCount;
-        currentRange.itemCount += dateEntry.itemCount;
-      } else {
-        // Gap found, save current range and start new one
-        ranges.push(currentRange);
-        currentRange = {
-          startDate: dateEntry.date,
-          endDate: dateEntry.date,
-          orderCount: dateEntry.orderCount,
-          itemCount: dateEntry.itemCount,
-        };
-      }
-    }
-  }
-
-  if (currentRange) {
-    ranges.push(currentRange);
-  }
+  // Return each date as its own individual entry (no grouping)
+  const ranges = dates.map((dateEntry) => ({
+    startDate: dateEntry.date,
+    endDate: dateEntry.date,
+    orderCount: dateEntry.orderCount,
+    itemCount: dateEntry.itemCount,
+  }));
 
   return ranges;
 }

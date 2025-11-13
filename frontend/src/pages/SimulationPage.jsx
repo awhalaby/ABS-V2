@@ -6,6 +6,10 @@ import { io } from "socket.io-client";
 import { WEBSOCKET_URL } from "../config/constants.js";
 import LoadingSpinner from "../components/common/LoadingSpinner.jsx";
 import ErrorMessage from "../components/common/ErrorMessage.jsx";
+import TimelineView from "../components/domain/TimelineView.jsx";
+import ExpectedOrders from "../components/domain/ExpectedOrders.jsx";
+import Stockout from "../components/domain/Stockout.jsx";
+import ActualOrders from "../components/domain/ActualOrders.jsx";
 
 export default function SimulationPage() {
   const [loading, setLoading] = useState(false);
@@ -478,6 +482,19 @@ export default function SimulationPage() {
             </div>
           )}
 
+          {/* Expected Orders / Forecast */}
+          {(simulation.forecast || simulation.timeIntervalForecast) && (
+            <ExpectedOrders
+              forecast={simulation.forecast || []}
+              timeIntervalForecast={simulation.timeIntervalForecast || []}
+            />
+          )}
+
+          {/* Actual Orders */}
+          <ActualOrders
+            processedOrdersByItem={simulation.processedOrdersByItem || []}
+          />
+
           {/* Inventory */}
           {simulation.inventory &&
             Object.keys(simulation.inventory).length > 0 && (
@@ -502,80 +519,38 @@ export default function SimulationPage() {
               </div>
             )}
 
-          {/* Active Batches */}
-          {simulation.batches && simulation.batches.length > 0 && (
+          {/* Batches Timeline View (Active + Completed) */}
+          {((simulation.batches && simulation.batches.length > 0) ||
+            (simulation.completedBatches &&
+              simulation.completedBatches.length > 0)) && (
             <div className="bg-white shadow rounded-lg p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Active Batches
+                Batches Timeline
               </h3>
-              <div className="overflow-x-auto">
-                <table className="min-w-full divide-y divide-gray-200">
-                  <thead className="bg-gray-50">
-                    <tr>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Item
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Oven
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Rack
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Status
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Start Time
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Pull Time
-                      </th>
-                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                        Available Time
-                      </th>
-                    </tr>
-                  </thead>
-                  <tbody className="bg-white divide-y divide-gray-200">
-                    {simulation.batches.map((batch) => (
-                      <tr key={batch.batchId}>
-                        <td className="px-4 py-3 text-sm text-gray-900">
-                          {batch.displayName || batch.batchId}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">
-                          Oven {batch.oven}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">
-                          Rack {batch.rackPosition}
-                        </td>
-                        <td className="px-4 py-3 text-sm">
-                          <span
-                            className={`px-2 py-1 rounded text-xs font-medium ${
-                              batch.status === "baking"
-                                ? "bg-blue-100 text-blue-800"
-                                : batch.status === "pulling"
-                                ? "bg-yellow-100 text-yellow-800"
-                                : "bg-gray-100 text-gray-800"
-                            }`}
-                          >
-                            {batch.status}
-                          </span>
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">
-                          {batch.startTime || "-"}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">
-                          {batch.endTime || "-"}
-                        </td>
-                        <td className="px-4 py-3 text-sm text-gray-500">
-                          {batch.availableTime || "-"}
-                        </td>
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </div>
+              <TimelineView
+                batches={[
+                  ...(simulation.batches || []),
+                  ...(simulation.completedBatches || []),
+                ]}
+                currentTime={simulation.currentTime}
+                onBatchClick={(batch) => {
+                  console.log("Batch clicked:", batch);
+                  // You can add batch details modal or other interactions here
+                }}
+                options={{
+                  hourInterval: 1,
+                  minutesPerPixel: 0.3,
+                  rackHeight: 140,
+                }}
+              />
             </div>
           )}
+
+          {/* Stockouts & Missed Orders */}
+          <Stockout
+            missedOrders={simulation.missedOrders || []}
+            events={simulation.recentEvents || []}
+          />
 
           {/* Recent Events */}
           {simulation.recentEvents && simulation.recentEvents.length > 0 && (
@@ -699,6 +674,112 @@ export default function SimulationPage() {
                   Orders are automatically processed when inventory becomes
                   available. Missed orders are logged in Recent Events.
                 </p>
+              </div>
+            </div>
+          )}
+
+          {/* Batches Table (Active + Completed) */}
+          {((simulation.batches && simulation.batches.length > 0) ||
+            (simulation.completedBatches &&
+              simulation.completedBatches.length > 0)) && (
+            <div className="bg-white shadow rounded-lg p-6">
+              <h3 className="text-lg font-medium text-gray-900 mb-4">
+                All Batches (Table View)
+              </h3>
+              <div className="overflow-x-auto">
+                <table className="min-w-full divide-y divide-gray-200">
+                  <thead className="bg-gray-50">
+                    <tr>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Item
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Oven
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Rack
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Status
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Start Time
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Pull Time
+                      </th>
+                      <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
+                        Available Time
+                      </th>
+                    </tr>
+                  </thead>
+                  <tbody className="bg-white divide-y divide-gray-200">
+                    {(() => {
+                      // Helper function to parse time string to minutes for sorting
+                      const parseTimeToMinutes = (timeStr) => {
+                        if (!timeStr || typeof timeStr !== "string")
+                          return Infinity;
+                        const [hours, minutes] = timeStr.split(":").map(Number);
+                        if (isNaN(hours) || isNaN(minutes)) return Infinity;
+                        return hours * 60 + minutes;
+                      };
+
+                      // Merge and sort batches by start time to keep completed batches in original position
+                      const allBatches = [
+                        ...(simulation.batches || []),
+                        ...(simulation.completedBatches || []),
+                      ].sort((a, b) => {
+                        const timeA = parseTimeToMinutes(a.startTime);
+                        const timeB = parseTimeToMinutes(b.startTime);
+                        if (timeA !== timeB) return timeA - timeB;
+                        // If same start time, sort by rack position
+                        return (a.rackPosition || 0) - (b.rackPosition || 0);
+                      });
+
+                      return allBatches.map((batch) => (
+                        <tr key={batch.batchId}>
+                          <td className="px-4 py-3 text-sm text-gray-900">
+                            {batch.displayName || batch.batchId}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            Oven {batch.oven}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            Rack {batch.rackPosition}
+                          </td>
+                          <td className="px-4 py-3 text-sm">
+                            <span
+                              className={`px-2 py-1 rounded text-xs font-medium ${
+                                batch.status === "baking"
+                                  ? "bg-blue-100 text-blue-800"
+                                  : batch.status === "pulling"
+                                  ? "bg-yellow-100 text-yellow-800"
+                                  : batch.status === "available"
+                                  ? "bg-green-100 text-green-800"
+                                  : batch.status === "completed"
+                                  ? "bg-green-100 text-green-800"
+                                  : batch.status === "cooling"
+                                  ? "bg-orange-100 text-orange-800"
+                                  : "bg-gray-100 text-gray-800"
+                              }`}
+                            >
+                              {batch.status}
+                            </span>
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            {batch.startTime || "-"}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            {batch.endTime || "-"}
+                          </td>
+                          <td className="px-4 py-3 text-sm text-gray-500">
+                            {batch.availableTime || "-"}
+                          </td>
+                        </tr>
+                      ));
+                    })()}
+                  </tbody>
+                </table>
               </div>
             </div>
           )}

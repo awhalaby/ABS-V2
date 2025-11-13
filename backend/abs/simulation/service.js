@@ -48,7 +48,14 @@ export class SimulationState {
       peakInventory: 0,
       ordersProcessed: 0,
       ordersTotal: 0,
+      ordersMissed: 0,
     };
+
+    // Track missed orders by item for stockout reporting
+    this.missedOrders = new Map(); // itemGuid -> { count, totalRequested, totalAvailable, orders: [] }
+
+    // Track processed orders by item for order reporting
+    this.processedOrdersByItem = new Map(); // itemGuid -> { count, totalQuantity, orders: [] }
 
     // Events log
     this.events = [];
@@ -353,12 +360,35 @@ export function updateSimulation(simulationId) {
 
           simulation.processedOrders.add(orderKey);
 
+          // Track processed order by item
+          if (!simulation.processedOrdersByItem.has(order.itemGuid)) {
+            simulation.processedOrdersByItem.set(order.itemGuid, {
+              itemGuid: order.itemGuid,
+              displayName: order.displayName,
+              count: 0,
+              totalQuantity: 0,
+              orders: [],
+            });
+          }
+
+          const processedItem = simulation.processedOrdersByItem.get(
+            order.itemGuid
+          );
+          processedItem.count++;
+          processedItem.totalQuantity += requestedQuantity;
+          processedItem.orders.push({
+            orderId: order.orderId,
+            quantity: requestedQuantity,
+            time: formatMinutesToTime(simulation.currentTime),
+          });
+
           simulation.addEvent(
             "order_processed",
             `Order processed: ${order.displayName} (${requestedQuantity} units)`,
             {
               orderId: order.orderId,
               itemGuid: order.itemGuid,
+              displayName: order.displayName,
               quantity: requestedQuantity,
               remainingInventory: newInventory,
             }
@@ -367,12 +397,38 @@ export function updateSimulation(simulationId) {
           // Not enough inventory - log as missed order
           // Still mark as processed so we don't keep trying
           simulation.processedOrders.add(orderKey);
+          simulation.stats.ordersMissed++;
+
+          // Track missed order by item
+          if (!simulation.missedOrders.has(order.itemGuid)) {
+            simulation.missedOrders.set(order.itemGuid, {
+              itemGuid: order.itemGuid,
+              displayName: order.displayName,
+              count: 0,
+              totalRequested: 0,
+              totalAvailable: 0,
+              orders: [],
+            });
+          }
+
+          const missedItem = simulation.missedOrders.get(order.itemGuid);
+          missedItem.count++;
+          missedItem.totalRequested += requestedQuantity;
+          missedItem.totalAvailable += availableInventory;
+          missedItem.orders.push({
+            orderId: order.orderId,
+            requestedQuantity,
+            availableInventory,
+            time: formatMinutesToTime(simulation.currentTime),
+          });
+
           simulation.addEvent(
             "order_missed",
             `Order missed (insufficient inventory): ${order.displayName} (requested: ${requestedQuantity}, available: ${availableInventory})`,
             {
               orderId: order.orderId,
               itemGuid: order.itemGuid,
+              displayName: order.displayName,
               requestedQuantity,
               availableInventory,
             }
@@ -514,11 +570,16 @@ export function updateAllSimulations(io) {
             endTime: b.endTime,
             availableTime: b.availableTime,
           })),
-          completedBatches: updated.completedBatches.map((b) => ({
+          completedBatches: (updated.completedBatches || []).map((b) => ({
             batchId: b.batchId,
             displayName: b.displayName,
             itemGuid: b.itemGuid,
             quantity: b.quantity,
+            rackPosition: b.rackPosition,
+            oven: b.oven,
+            status: "completed",
+            startTime: b.startTime,
+            endTime: b.endTime,
             availableTime: b.availableTime,
           })),
           forecast: updated.forecast || [],
@@ -532,6 +593,10 @@ export function updateAllSimulations(io) {
             displayName: order.displayName,
           })),
           recentEvents: updated.events.slice(-5),
+          missedOrders: Array.from(updated.missedOrders.values()),
+          processedOrdersByItem: Array.from(
+            updated.processedOrdersByItem.values()
+          ),
           mode: updated.mode,
         };
         io.to(`simulation:${id}`).emit("simulation_update", updateData);

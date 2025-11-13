@@ -8,6 +8,8 @@ import {
 } from "../utils/formatters.js";
 import ScheduleControls from "../components/domain/ScheduleControls.jsx";
 import ScheduleTable from "../components/domain/ScheduleTable.jsx";
+import TimelineView from "../components/domain/TimelineView.jsx";
+import ExpectedOrders from "../components/domain/ExpectedOrders.jsx";
 import LoadingSpinner from "../components/common/LoadingSpinner.jsx";
 import ErrorMessage from "../components/common/ErrorMessage.jsx";
 import { format as formatDateFns, addDays } from "date-fns";
@@ -164,6 +166,14 @@ export default function SchedulePage() {
             </div>
           )}
 
+          {/* Expected Orders / Forecast */}
+          {(schedule.forecast || schedule.timeIntervalForecast) && (
+            <ExpectedOrders
+              forecast={schedule.forecast || []}
+              timeIntervalForecast={schedule.timeIntervalForecast || []}
+            />
+          )}
+
           {/* Schedule Table */}
           <div className="bg-white shadow rounded-lg p-6">
             <div className="flex justify-between items-center mb-4">
@@ -195,41 +205,20 @@ export default function SchedulePage() {
           {schedule.batches && schedule.batches.length > 0 && (
             <div className="bg-white shadow rounded-lg p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
-                Schedule Timeline
+                Schedule Timeline View
               </h3>
-              <div className="space-y-2">
-                {Array.from({ length: 12 }, (_, i) => i + 1).map((rack) => {
-                  const rackBatches = schedule.batches.filter(
-                    (b) => b.rackPosition === rack
-                  );
-                  return (
-                    <div key={rack} className="border-b pb-2">
-                      <div className="text-sm font-medium text-gray-700 mb-1">
-                        Rack {rack}
-                      </div>
-                      <div className="flex gap-1">
-                        {rackBatches.map((batch) => (
-                          <div
-                            key={batch.batchId}
-                            className="bg-blue-100 text-blue-800 text-xs px-2 py-1 rounded"
-                            title={`${batch.displayName || batch.itemGuid} - ${
-                              batch.startTime
-                            } to ${batch.endTime}`}
-                          >
-                            {batch.displayName || batch.itemGuid} (
-                            {batch.startTime})
-                          </div>
-                        ))}
-                        {rackBatches.length === 0 && (
-                          <span className="text-xs text-gray-400">
-                            No batches
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                  );
-                })}
-              </div>
+              <TimelineView
+                batches={schedule.batches || []}
+                onBatchClick={(batch) => {
+                  console.log("Batch clicked:", batch);
+                  // You can add batch details modal or other interactions here
+                }}
+                options={{
+                  hourInterval: 1,
+                  minutesPerPixel: 0.3,
+                  rackHeight: 140,
+                }}
+              />
             </div>
           )}
         </div>

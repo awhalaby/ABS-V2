@@ -213,7 +213,10 @@ export async function getAvailableDateRanges() {
     endDate: range.endDate,
     orderCount: range.orderCount,
     itemCount: range.itemCount,
-    dateRange: `${range.startDate} to ${range.endDate}`,
+    dateRange:
+      range.startDate === range.endDate
+        ? range.startDate
+        : `${range.startDate} to ${range.endDate}`,
   }));
 }
 

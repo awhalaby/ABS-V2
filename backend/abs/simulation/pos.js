@@ -1,4 +1,5 @@
 import { getSimulation, updateSimulation } from "./service.js";
+import { formatMinutesToTime } from "../../shared/utils/timeUtils.js";
 
 /**
  * POS Service - Handle purchases and inventory management
@@ -54,6 +55,38 @@ export function purchaseItems(simulationId, items, io = null) {
     simulation.stats.totalInventory = Array.from(
       simulation.inventory.values()
     ).reduce((sum, qty) => sum + qty, 0);
+
+    // Track purchase as processed order (for manual mode)
+    if (!simulation.processedOrdersByItem.has(itemGuid)) {
+      simulation.processedOrdersByItem.set(itemGuid, {
+        itemGuid,
+        displayName: null, // Will be filled from batch data if available
+        count: 0,
+        totalQuantity: 0,
+        orders: [],
+      });
+    }
+
+    const processedItem = simulation.processedOrdersByItem.get(itemGuid);
+    processedItem.count++;
+    processedItem.totalQuantity += quantity;
+    processedItem.orders.push({
+      orderId: `purchase-${Date.now()}-${Math.random()}`,
+      quantity,
+      time: formatMinutesToTime(simulation.currentTime),
+      isPurchase: true,
+    });
+
+    // Try to get display name from batches
+    if (!processedItem.displayName) {
+      const batch = [
+        ...simulation.batches,
+        ...simulation.completedBatches,
+      ].find((b) => b.itemGuid === itemGuid);
+      if (batch) {
+        processedItem.displayName = batch.displayName;
+      }
+    }
 
     // Add purchase event
     simulation.addEvent("purchase", `Purchased ${quantity} of ${itemGuid}`, {

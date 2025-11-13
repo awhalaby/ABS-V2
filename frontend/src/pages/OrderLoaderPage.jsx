@@ -528,9 +528,7 @@ export default function OrderLoaderPage() {
       {/* Date Ranges Section */}
       <div className="bg-white shadow rounded-lg p-6">
         <div className="flex justify-between items-center mb-4">
-          <h3 className="text-lg font-medium text-gray-900">
-            Existing Date Ranges
-          </h3>
+          <h3 className="text-lg font-medium text-gray-900">Existing Dates</h3>
           <div className="flex gap-3">
             <button
               onClick={loadDateRanges}
@@ -558,7 +556,7 @@ export default function OrderLoaderPage() {
         ) : dateRanges.length === 0 ? (
           <EmptyState
             title="No orders found"
-            message="Upload order files to see date ranges here."
+            message="Upload order files to see dates here."
           />
         ) : (
           <div className="overflow-x-auto">
@@ -566,7 +564,7 @@ export default function OrderLoaderPage() {
               <thead className="bg-gray-50">
                 <tr>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
-                    Date Range
+                    Date
                   </th>
                   <th className="px-4 py-3 text-left text-xs font-medium text-gray-500 uppercase">
                     Orders

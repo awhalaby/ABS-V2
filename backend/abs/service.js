@@ -123,6 +123,26 @@ function calculateBatches(
 }
 
 /**
+ * Round minutes to the next 20-minute increment
+ * Batches can ONLY start at :00, :20, :40 of each hour
+ * @param {number} minutes - Minutes since midnight
+ * @returns {number} Rounded minutes to next 20-minute increment (0, 20, 40 of each hour)
+ */
+function roundToTwentyMinuteIncrement(minutes) {
+  const increment = 20;
+  return Math.ceil(minutes / increment) * increment;
+}
+
+/**
+ * Check if a time is at a valid 20-minute increment
+ * @param {number} minutes - Minutes since midnight
+ * @returns {boolean} True if minutes is at :00, :20, or :40
+ */
+function isValidTwentyMinuteIncrement(minutes) {
+  return minutes % 20 === 0;
+}
+
+/**
  * Schedule batches using PAR-based algorithm with time-interval forecasts
  * @param {Array} batches - Array of batch objects
  * @param {Array} timeIntervalForecast - Time-interval forecast data
@@ -270,43 +290,65 @@ function scheduleBatchesWithPAR(
           )
         : requiredStartTime;
 
-      // Find available rack slot
+      // Round to next 20-minute increment (:00, :20, :40)
+      const roundedStartTime = roundToTwentyMinuteIncrement(
+        Math.max(BUSINESS_HOURS.START_MINUTES, targetStartTime)
+      );
+
+      // Find available rack slot at the rounded time
+      // Batches can ONLY start at :00, :20, :40 - use different racks for same time slot
       let bestRack = null;
-      let bestTime = Infinity;
+      let scheduledStartTime = null;
+      let currentTimeSlot = roundedStartTime;
 
-      for (let i = 0; i < racks.length; i++) {
-        const rack = racks[i];
-        const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
-
-        // Respect bake spec oven assignment
-        if (
-          batch.oven !== null &&
-          batch.oven !== undefined &&
-          rackOven !== batch.oven
-        ) {
-          continue;
+      // Try up to 5 time slots (100 minutes) to find an available rack
+      for (let slotAttempt = 0; slotAttempt < 5; slotAttempt++) {
+        // Ensure we're at a valid 20-minute increment
+        if (!isValidTwentyMinuteIncrement(currentTimeSlot)) {
+          currentTimeSlot = roundToTwentyMinuteIncrement(currentTimeSlot);
         }
 
-        const availableTime = rack.endTime;
-        const startTime = Math.max(availableTime, targetStartTime);
-        const endTime = startTime + batch.bakeTime;
+        // Check all racks at this time slot
+        for (let i = 0; i < racks.length; i++) {
+          const rack = racks[i];
+          const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
 
-        // Must be within business hours
-        if (endTime > BUSINESS_HOURS.END_MINUTES) continue;
+          // Respect bake spec oven assignment
+          if (
+            batch.oven !== null &&
+            batch.oven !== undefined &&
+            rackOven !== batch.oven
+          ) {
+            continue;
+          }
 
-        // Prefer earlier times, but prioritize meeting required time
-        const timeScore =
-          startTime <= requiredStartTime ? startTime : startTime + 10000; // Penalty for late starts
+          // Rack must be free at or before this time slot
+          // Batches MUST start exactly at the time slot, not earlier
+          if (rack.endTime > currentTimeSlot) {
+            continue;
+          }
 
-        if (timeScore < bestTime) {
-          bestTime = timeScore;
+          const endTime = currentTimeSlot + batch.bakeTime;
+
+          // Must be within business hours
+          if (endTime > BUSINESS_HOURS.END_MINUTES) continue;
+
+          // Found an available rack at this time slot
           bestRack = i;
+          scheduledStartTime = currentTimeSlot; // Always use the exact time slot
+          break;
         }
+
+        // If we found a rack, break out of time slot loop
+        if (bestRack !== null) break;
+
+        // Move to next 20-minute increment
+        currentTimeSlot += 20;
       }
 
-      if (bestRack !== null) {
+      if (bestRack !== null && scheduledStartTime !== null) {
         const rack = racks[bestRack];
-        const startTime = Math.max(rack.endTime, targetStartTime);
+        const startTime = scheduledStartTime;
         const endTime = startTime + batch.bakeTime;
         const rackOven = Math.floor(bestRack / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
 
@@ -332,12 +374,14 @@ function scheduleBatchesWithPAR(
       batchIndex++;
     });
 
-    // Schedule any remaining batches sequentially
+    // Schedule any remaining batches sequentially with 20-minute increments
     while (batchIndex < itemBatches.length) {
       const batch = itemBatches[batchIndex];
       let bestRack = null;
-      let earliestTime = Infinity;
+      let scheduledStartTime = null;
 
+      // Find the earliest available rack end time
+      let earliestRackEndTime = Infinity;
       for (let i = 0; i < racks.length; i++) {
         const rack = racks[i];
         const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
@@ -350,19 +394,58 @@ function scheduleBatchesWithPAR(
           continue;
         }
 
-        const availableTime = rack.endTime;
-        if (
-          availableTime < earliestTime &&
-          availableTime + batch.bakeTime <= BUSINESS_HOURS.END_MINUTES
-        ) {
-          earliestTime = availableTime;
-          bestRack = i;
+        if (rack.endTime < earliestRackEndTime) {
+          earliestRackEndTime = rack.endTime;
         }
       }
 
-      if (bestRack !== null) {
+      // Round to next 20-minute increment (:00, :20, :40)
+      const roundedStartTime = roundToTwentyMinuteIncrement(
+        Math.max(BUSINESS_HOURS.START_MINUTES, earliestRackEndTime)
+      );
+
+      // Try to find an available rack at the rounded time
+      // Batches can ONLY start at :00, :20, :40 - use different racks for same time slot
+      let currentTimeSlot = roundedStartTime;
+      for (let slotAttempt = 0; slotAttempt < 5; slotAttempt++) {
+        // Ensure we're at a valid 20-minute increment
+        if (!isValidTwentyMinuteIncrement(currentTimeSlot)) {
+          currentTimeSlot = roundToTwentyMinuteIncrement(currentTimeSlot);
+        }
+
+        for (let i = 0; i < racks.length; i++) {
+          const rack = racks[i];
+          const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+          if (
+            batch.oven !== null &&
+            batch.oven !== undefined &&
+            rackOven !== batch.oven
+          ) {
+            continue;
+          }
+
+          // Rack must be free at or before this time slot
+          // Batches MUST start exactly at the time slot, not earlier
+          if (rack.endTime > currentTimeSlot) {
+            continue;
+          }
+
+          const endTime = currentTimeSlot + batch.bakeTime;
+          if (endTime > BUSINESS_HOURS.END_MINUTES) continue;
+
+          bestRack = i;
+          scheduledStartTime = currentTimeSlot; // Always use the exact time slot
+          break;
+        }
+
+        if (bestRack !== null) break;
+        currentTimeSlot += 20;
+      }
+
+      if (bestRack !== null && scheduledStartTime !== null) {
         const rack = racks[bestRack];
-        const startTime = rack.endTime;
+        const startTime = scheduledStartTime;
         const endTime = startTime + batch.bakeTime;
         const rackOven = Math.floor(bestRack / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
 
@@ -414,20 +497,15 @@ function scheduleBatches(batches, date) {
     return b.quantity - a.quantity;
   });
 
-  // Assign batches to racks
+  // Assign batches to racks with 20-minute increments
   sortedBatches.forEach((batch) => {
-    // Find the rack with the earliest available time
-    // Oven assignment comes from bake spec exclusively:
-    // - If bake spec specifies oven (1 or 2), only consider racks in that oven
-    // - If bake spec oven is null/undefined ("Any"), consider all racks
-    let bestRack = null;
-    let earliestTime = Infinity;
-
+    // Find the earliest available rack end time
+    let earliestRackEndTime = Infinity;
     for (let i = 0; i < racks.length; i++) {
       const rack = racks[i];
       const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
 
-      // Respect bake spec oven assignment - skip racks in different oven if specified
+      // Respect bake spec oven assignment
       if (
         batch.oven !== null &&
         batch.oven !== undefined &&
@@ -436,29 +514,70 @@ function scheduleBatches(batches, date) {
         continue;
       }
 
-      const availableTime = rack.endTime;
-
-      if (
-        availableTime < earliestTime &&
-        availableTime + batch.bakeTime <= BUSINESS_HOURS.END_MINUTES
-      ) {
-        earliestTime = availableTime;
-        bestRack = i;
+      if (rack.endTime < earliestRackEndTime) {
+        earliestRackEndTime = rack.endTime;
       }
     }
 
-    if (bestRack !== null) {
+    // Round to next 20-minute increment (:00, :20, :40)
+    const roundedStartTime = roundToTwentyMinuteIncrement(
+      Math.max(BUSINESS_HOURS.START_MINUTES, earliestRackEndTime)
+    );
+
+    // Find available rack at the rounded time
+    // Batches can ONLY start at :00, :20, :40 - use different racks for same time slot
+    let bestRack = null;
+    let scheduledStartTime = null;
+    let currentTimeSlot = roundedStartTime;
+
+    // Try up to 5 time slots (100 minutes) to find an available rack
+    for (let slotAttempt = 0; slotAttempt < 5; slotAttempt++) {
+      // Ensure we're at a valid 20-minute increment
+      if (!isValidTwentyMinuteIncrement(currentTimeSlot)) {
+        currentTimeSlot = roundToTwentyMinuteIncrement(currentTimeSlot);
+      }
+
+      for (let i = 0; i < racks.length; i++) {
+        const rack = racks[i];
+        const rackOven = Math.floor(i / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+        // Respect bake spec oven assignment
+        if (
+          batch.oven !== null &&
+          batch.oven !== undefined &&
+          rackOven !== batch.oven
+        ) {
+          continue;
+        }
+
+        // Rack must be free at or before this time slot
+        // Batches MUST start exactly at the time slot, not earlier
+        if (rack.endTime > currentTimeSlot) {
+          continue;
+        }
+
+        const endTime = currentTimeSlot + batch.bakeTime;
+        if (endTime > BUSINESS_HOURS.END_MINUTES) continue;
+
+        bestRack = i;
+        scheduledStartTime = currentTimeSlot; // Always use the exact time slot
+        break;
+      }
+
+      if (bestRack !== null) break;
+      currentTimeSlot += 20;
+    }
+
+    if (bestRack !== null && scheduledStartTime !== null) {
       const rack = racks[bestRack];
-      const startTime = rack.endTime;
+      const startTime = scheduledStartTime;
       const endTime = startTime + batch.bakeTime;
       const rackOven = Math.floor(bestRack / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
 
       batch.rackPosition = bestRack + 1; // 1-indexed
-      // Record actual oven assignment (will match bake spec oven if specified, or any oven if bake spec was "Any")
       batch.oven = rackOven;
       batch.startTime = formatMinutesToTime(startTime);
       batch.endTime = formatMinutesToTime(endTime);
-      // Calculate available time: end time (pull time) + cool time
       batch.availableTime = addMinutesToTime(
         batch.endTime,
         batch.coolTime || 0
@@ -630,6 +749,25 @@ export async function generateSchedule(params) {
     scheduledBatches = scheduleBatches(allBatches, parseISO(dateStr));
   }
 
+  // Post-process: Ensure all start times are at 20-minute increments
+  scheduledBatches.forEach((batch) => {
+    if (batch.startTime && batch.rackPosition !== null) {
+      const startMinutes = parseTimeToMinutes(batch.startTime);
+      const roundedStartMinutes = roundToTwentyMinuteIncrement(startMinutes);
+
+      // Only update if rounding changed the time
+      if (roundedStartMinutes !== startMinutes) {
+        batch.startTime = formatMinutesToTime(roundedStartMinutes);
+        const endMinutes = roundedStartMinutes + batch.bakeTime;
+        batch.endTime = formatMinutesToTime(endMinutes);
+        batch.availableTime = addMinutesToTime(
+          batch.endTime,
+          batch.coolTime || 0
+        );
+      }
+    }
+  });
+
   // Calculate summary statistics
   const summary = {
     totalBatches: scheduledBatches.length,
@@ -723,7 +861,11 @@ export async function moveBatch(params) {
 
   // Validate new start time
   if (newStartTime) {
-    const startMinutes = parseTimeToMinutes(newStartTime);
+    let startMinutes = parseTimeToMinutes(newStartTime);
+
+    // Round to 20-minute increment
+    startMinutes = roundToTwentyMinuteIncrement(startMinutes);
+
     if (
       startMinutes < BUSINESS_HOURS.START_MINUTES ||
       startMinutes > BUSINESS_HOURS.END_MINUTES
@@ -736,7 +878,7 @@ export async function moveBatch(params) {
       throw new Error("Batch would end after business hours");
     }
 
-    batch.startTime = newStartTime;
+    batch.startTime = formatMinutesToTime(startMinutes);
     batch.endTime = formatMinutesToTime(endMinutes);
     // Recalculate available time: end time (pull time) + cool time
     batch.availableTime = addMinutesToTime(batch.endTime, batch.coolTime || 0);

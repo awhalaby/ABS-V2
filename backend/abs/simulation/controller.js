@@ -63,11 +63,16 @@ export const startSimulationController = asyncHandler(async (req, res) => {
         endTime: b.endTime,
         availableTime: b.availableTime,
       })),
-      completedBatches: simulation.completedBatches.map((b) => ({
+      completedBatches: (simulation.completedBatches || []).map((b) => ({
         batchId: b.batchId,
         displayName: b.displayName,
         itemGuid: b.itemGuid,
         quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: "completed",
+        startTime: b.startTime,
+        endTime: b.endTime,
         availableTime: b.availableTime,
       })),
       forecast: simulation.forecast || [],
@@ -78,6 +83,10 @@ export const startSimulationController = asyncHandler(async (req, res) => {
         orderTimeMinutes: order.orderTimeMinutes,
         displayName: order.displayName,
       })),
+      missedOrders: Array.from(simulation.missedOrders.values()),
+      processedOrdersByItem: Array.from(
+        simulation.processedOrdersByItem.values()
+      ),
     },
   });
 });
@@ -127,8 +136,24 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
         endTime: b.endTime,
         availableTime: b.availableTime,
       })),
+      completedBatches: (simulation.completedBatches || []).map((b) => ({
+        batchId: b.batchId,
+        displayName: b.displayName,
+        itemGuid: b.itemGuid,
+        quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: "completed",
+        startTime: b.startTime,
+        endTime: b.endTime,
+        availableTime: b.availableTime,
+      })),
       forecast: simulation.forecast || [],
       recentEvents: simulation.events.slice(-10), // Last 10 events
+      missedOrders: Array.from(simulation.missedOrders.values()),
+      processedOrdersByItem: Array.from(
+        simulation.processedOrdersByItem.values()
+      ),
     },
   });
 });
