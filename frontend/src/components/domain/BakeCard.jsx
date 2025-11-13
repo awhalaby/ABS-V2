@@ -11,7 +11,6 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
   if (!batch) return null;
 
   const {
-    batchId,
     displayName,
     itemGuid,
     quantity,
@@ -22,7 +21,6 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
     availableTime,
     status,
     bakeTime,
-    coolTime,
   } = batch;
 
   // Determine status color
@@ -47,11 +45,32 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
 
   const statusColor = getStatusColor();
 
+  const handlePointerDown = (e) => {
+    // Stop propagation to prevent DndContext from interfering
+    e.stopPropagation();
+  };
+
+  const handlePointerUp = (e) => {
+    // Stop propagation and handle click
+    e.stopPropagation();
+    if (onClick) {
+      onClick(e);
+    }
+  };
+
   return (
     <div
       className={`bake-card absolute border-2 rounded-lg p-3 shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${className}`}
       style={style}
-      onClick={onClick}
+      onPointerDown={handlePointerDown}
+      onPointerUp={handlePointerUp}
+      onClick={(e) => {
+        // Fallback for browsers that don't support pointer events
+        e.stopPropagation();
+        if (onClick) {
+          onClick(e);
+        }
+      }}
       title={`${displayName || itemGuid} - ${startTime || "TBD"} to ${
         endTime || "TBD"
       }`}

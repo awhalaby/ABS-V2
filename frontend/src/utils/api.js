@@ -156,4 +156,13 @@ export const simulationAPI = {
   getAvailableItems: (id) => api.get(`/api/abs/simulation/${id}/pos/items`),
   purchaseItems: (id, items) =>
     api.post(`/api/abs/simulation/${id}/pos/purchase`, { items }),
+  // Batch operations
+  deleteBatch: (id, batchId) =>
+    api.delete(`/api/abs/simulation/${id}/batch/${batchId}`),
+  moveBatch: (id, batchId, newStartTime, newRack) =>
+    api.post(`/api/abs/simulation/${id}/batch/move`, {
+      batchId,
+      newStartTime,
+      newRack,
+    }),
 };

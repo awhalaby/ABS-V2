@@ -1,4 +1,8 @@
-import { getScheduleByDate } from "../repository.js";
+import {
+  getScheduleByDate,
+  updateScheduleBatch,
+  deleteScheduleBatch,
+} from "../repository.js";
 import {
   parseTimeToMinutes,
   formatMinutesToTime,
@@ -24,6 +28,7 @@ export class SimulationState {
   constructor(config) {
     this.id = uuidv4();
     this.scheduleDate = config.scheduleDate;
+    this.scheduleId = config.scheduleId || null; // MongoDB _id of the schedule
     this.speedMultiplier = config.speedMultiplier || 60; // 60x speed by default
     this.status = "running"; // running, paused, stopped, completed
     this.currentTime = BUSINESS_HOURS.START_MINUTES; // Current simulation time in minutes
@@ -116,6 +121,7 @@ export async function startSimulation(config) {
 
   // Load schedule, auto-generate if it doesn't exist
   let schedule = await getScheduleByDate(scheduleDate);
+  let scheduleId = null;
   if (!schedule) {
     // Auto-generate schedule with default parameters
     try {
@@ -124,12 +130,22 @@ export async function startSimulation(config) {
         date: scheduleDate,
         ...defaultParams,
       });
+      // After generating, reload to get the _id
+      schedule = await getScheduleByDate(scheduleDate);
     } catch (error) {
       throw new Error(
         `No schedule found for date: ${scheduleDate}, and failed to auto-generate: ${error.message}`
       );
     }
   }
+
+  // Store the MongoDB _id for database updates
+  if (!schedule || !schedule._id) {
+    throw new Error(
+      `Schedule loaded but missing _id for date: ${scheduleDate}`
+    );
+  }
+  scheduleId = schedule._id;
 
   // For preset mode, load orders for the date
   let presetOrders = [];
@@ -166,6 +182,7 @@ export async function startSimulation(config) {
   // Create simulation state
   const simulation = new SimulationState({
     scheduleDate,
+    scheduleId,
     speedMultiplier,
     mode,
     presetOrders,
@@ -515,6 +532,220 @@ export function getSimulation(simulationId) {
  */
 export function getAllSimulations() {
   return Array.from(activeSimulations.values());
+}
+
+/**
+ * Move a batch to a new time/rack in simulation
+ * @param {string} simulationId - Simulation ID
+ * @param {string} batchId - Batch ID
+ * @param {string} newStartTime - New start time (HH:MM format)
+ * @param {number} newRack - New rack position (1-12)
+ * @returns {Promise<SimulationState|null>} Updated simulation state
+ */
+export async function moveSimulationBatch(
+  simulationId,
+  batchId,
+  newStartTime,
+  newRack
+) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return null;
+  }
+
+  // Find batch in active batches
+  const batch = simulation.batches.find((b) => b.batchId === batchId);
+  if (!batch) {
+    throw new Error("Batch not found");
+  }
+
+  // Only allow moving scheduled batches
+  if (batch.status !== "scheduled") {
+    throw new Error("Only scheduled batches can be moved");
+  }
+
+  // Validate new rack (1-12)
+  if (newRack < 1 || newRack > 12) {
+    throw new Error("Rack must be between 1 and 12");
+  }
+
+  // Parse new start time
+  const newStartMinutes = parseTimeToMinutes(newStartTime);
+  if (
+    !newStartMinutes ||
+    newStartMinutes < BUSINESS_HOURS.START_MINUTES ||
+    newStartMinutes > BUSINESS_HOURS.END_MINUTES
+  ) {
+    throw new Error("Invalid start time - must be within business hours");
+  }
+
+  // Round to 20-minute increment
+  const roundToTwentyMinuteIncrement = (minutes) => {
+    const increment = 20;
+    return Math.round(minutes / increment) * increment;
+  };
+  const roundedStartMinutes = roundToTwentyMinuteIncrement(newStartMinutes);
+
+  // Calculate new end time
+  const newEndMinutes = roundedStartMinutes + batch.bakeTime;
+  if (newEndMinutes > BUSINESS_HOURS.END_MINUTES) {
+    throw new Error("Batch would end after business hours");
+  }
+
+  // Check oven requirement
+  const newOven = Math.floor((newRack - 1) / 6) + 1;
+  if (
+    batch.oven !== null &&
+    batch.oven !== undefined &&
+    batch.oven !== newOven
+  ) {
+    throw new Error(
+      `Batch must be in Oven ${batch.oven}, but rack ${newRack} is in Oven ${newOven}`
+    );
+  }
+
+  // Store old position for logging
+  const oldRack = batch.rackPosition;
+
+  // Check for conflicts on the new rack
+  const conflictingBatch = simulation.batches.find((b) => {
+    if (b.batchId === batchId) return false;
+    if (b.rackPosition !== newRack) return false;
+    if (!b.startTime || !b.endTime) return false;
+
+    const bStart = parseTimeToMinutes(b.startTime);
+    const bEnd = parseTimeToMinutes(b.endTime);
+
+    return (
+      (roundedStartMinutes >= bStart && roundedStartMinutes < bEnd) ||
+      (newEndMinutes > bStart && newEndMinutes <= bEnd) ||
+      (roundedStartMinutes <= bStart && newEndMinutes >= bEnd)
+    );
+  });
+
+  if (conflictingBatch) {
+    throw new Error(
+      `Rack ${newRack} is already occupied at ${formatMinutesToTime(
+        roundedStartMinutes
+      )}`
+    );
+  }
+
+  // Calculate new available time
+  const newEndTime = formatMinutesToTime(newEndMinutes);
+  const newAvailableTime = addMinutesToTime(newEndTime, batch.coolTime || 0);
+
+  // Update batch in simulation state
+  batch.startTime = formatMinutesToTime(roundedStartMinutes);
+  batch.endTime = newEndTime;
+  batch.availableTime = newAvailableTime;
+  batch.rackPosition = newRack;
+  batch.oven = newOven;
+
+  // Update batch in database schedule
+  if (simulation.scheduleId) {
+    try {
+      await updateScheduleBatch(simulation.scheduleId, batchId, {
+        ...batch,
+        // Ensure all batch fields are included
+        batchId: batch.batchId,
+        itemGuid: batch.itemGuid,
+        displayName: batch.displayName,
+        quantity: batch.quantity,
+        bakeTime: batch.bakeTime,
+        coolTime: batch.coolTime,
+        startTime: batch.startTime,
+        endTime: batch.endTime,
+        availableTime: batch.availableTime,
+        rackPosition: batch.rackPosition,
+        oven: batch.oven,
+      });
+    } catch (error) {
+      // Log error but don't fail the simulation update
+      console.error("Failed to update batch in database:", error);
+      simulation.addEvent(
+        "batch_move_error",
+        `Failed to save batch move to database: ${error.message}`,
+        { batchId, error: error.message }
+      );
+    }
+  }
+
+  simulation.addEvent(
+    "batch_moved",
+    `Batch moved: ${
+      batch.displayName || batch.itemGuid
+    } to Rack ${newRack} at ${batch.startTime}`,
+    {
+      batchId: batch.batchId,
+      newRack,
+      newStartTime: batch.startTime,
+      oldRack: oldRack,
+    }
+  );
+
+  return simulation;
+}
+
+/**
+ * Delete a batch from simulation
+ * @param {string} simulationId - Simulation ID
+ * @param {string} batchId - Batch ID
+ * @returns {SimulationState|null} Updated simulation state
+ */
+export function deleteSimulationBatch(simulationId, batchId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return null;
+  }
+
+  // Find batch in active batches
+  const batchIndex = simulation.batches.findIndex((b) => b.batchId === batchId);
+  if (batchIndex === -1) {
+    // Also check completed batches
+    const completedIndex = (simulation.completedBatches || []).findIndex(
+      (b) => b.batchId === batchId
+    );
+    if (completedIndex === -1) {
+      throw new Error("Batch not found");
+    }
+    const batch = simulation.completedBatches[completedIndex];
+    simulation.completedBatches.splice(completedIndex, 1);
+    simulation.addEvent(
+      "batch_deleted",
+      `Batch deleted: ${batch.displayName || batch.itemGuid}`,
+      {
+        batchId: batch.batchId,
+        itemGuid: batch.itemGuid,
+        displayName: batch.displayName,
+        rackPosition: batch.rackPosition,
+        oven: batch.oven,
+        startTime: batch.startTime,
+      }
+    );
+    return simulation;
+  }
+
+  const batch = simulation.batches[batchIndex];
+
+  // Remove batch
+  simulation.batches.splice(batchIndex, 1);
+
+  // Log deletion event
+  simulation.addEvent(
+    "batch_deleted",
+    `Batch deleted: ${batch.displayName || batch.itemGuid}`,
+    {
+      batchId: batch.batchId,
+      itemGuid: batch.itemGuid,
+      displayName: batch.displayName,
+      rackPosition: batch.rackPosition,
+      oven: batch.oven,
+      startTime: batch.startTime,
+    }
+  );
+
+  return simulation;
 }
 
 /**

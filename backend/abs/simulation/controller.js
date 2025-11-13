@@ -7,6 +7,8 @@ import {
   stopSimulation,
   getSimulation,
   updateSimulation,
+  deleteSimulationBatch,
+  moveSimulationBatch,
 } from "./service.js";
 
 /**
@@ -316,3 +318,131 @@ export const getAvailableDatesController = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/**
+ * Move a batch in simulation
+ * POST /api/abs/simulation/:id/batch/move
+ */
+export const moveSimulationBatchController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { batchId, newStartTime, newRack } = req.body;
+
+  if (!batchId || !newStartTime || !newRack) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        message: "batchId, newStartTime, and newRack are required",
+      },
+    });
+  }
+
+  const simulation = await moveSimulationBatch(
+    id,
+    batchId,
+    newStartTime,
+    newRack
+  );
+  if (!simulation) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        message: "Simulation not found",
+      },
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      id: simulation.id,
+      status: simulation.status,
+      batches: simulation.batches.map((b) => ({
+        batchId: b.batchId,
+        displayName: b.displayName,
+        itemGuid: b.itemGuid,
+        quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: b.status,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        availableTime: b.availableTime,
+      })),
+      completedBatches: (simulation.completedBatches || []).map((b) => ({
+        batchId: b.batchId,
+        displayName: b.displayName,
+        itemGuid: b.itemGuid,
+        quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: "completed",
+        startTime: b.startTime,
+        endTime: b.endTime,
+        availableTime: b.availableTime,
+      })),
+      recentEvents: simulation.events.slice(-10),
+    },
+  });
+});
+
+/**
+ * Delete a batch from simulation
+ * DELETE /api/abs/simulation/:id/batch/:batchId
+ */
+export const deleteSimulationBatchController = asyncHandler(
+  async (req, res) => {
+    const { id, batchId } = req.params;
+
+    if (!batchId) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: "batchId is required",
+        },
+      });
+    }
+
+    const simulation = deleteSimulationBatch(id, batchId);
+    if (!simulation) {
+      return res.status(404).json({
+        success: false,
+        error: {
+          message: "Simulation not found",
+        },
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      data: {
+        id: simulation.id,
+        status: simulation.status,
+        batches: simulation.batches.map((b) => ({
+          batchId: b.batchId,
+          displayName: b.displayName,
+          itemGuid: b.itemGuid,
+          quantity: b.quantity,
+          rackPosition: b.rackPosition,
+          oven: b.oven,
+          status: b.status,
+          startTime: b.startTime,
+          endTime: b.endTime,
+          availableTime: b.availableTime,
+        })),
+        completedBatches: (simulation.completedBatches || []).map((b) => ({
+          batchId: b.batchId,
+          displayName: b.displayName,
+          itemGuid: b.itemGuid,
+          quantity: b.quantity,
+          rackPosition: b.rackPosition,
+          oven: b.oven,
+          status: "completed",
+          startTime: b.startTime,
+          endTime: b.endTime,
+          availableTime: b.availableTime,
+        })),
+        recentEvents: simulation.events.slice(-10),
+      },
+    });
+  }
+);

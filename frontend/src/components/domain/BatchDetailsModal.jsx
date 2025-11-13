@@ -1,3 +1,4 @@
+import { useState } from "react";
 import {
   formatTime,
   formatNumber,
@@ -9,8 +10,16 @@ import {
  * @param {Object} batch - Batch object to display
  * @param {boolean} isOpen - Whether the modal is open
  * @param {Function} onClose - Function to call when closing the modal
+ * @param {Function} onDelete - Optional function to call when deleting the batch
  */
-export default function BatchDetailsModal({ batch, isOpen, onClose }) {
+export default function BatchDetailsModal({
+  batch,
+  isOpen,
+  onClose,
+  onDelete,
+}) {
+  const [showConfirmDelete, setShowConfirmDelete] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   if (!isOpen || !batch) return null;
 
   const {
@@ -89,6 +98,28 @@ export default function BatchDetailsModal({ batch, isOpen, onClose }) {
   };
 
   const statusInfo = getStatusInfo();
+
+  const handleDeleteClick = () => {
+    setShowConfirmDelete(true);
+  };
+
+  const handleConfirmDelete = async () => {
+    if (!onDelete) return;
+    setDeleting(true);
+    try {
+      await onDelete(batch.batchId);
+      setShowConfirmDelete(false);
+      onClose();
+    } catch (err) {
+      alert(`Failed to delete batch: ${err.message || "Unknown error"}`);
+    } finally {
+      setDeleting(false);
+    }
+  };
+
+  const handleCancelDelete = () => {
+    setShowConfirmDelete(false);
+  };
 
   return (
     <>
@@ -286,13 +317,44 @@ export default function BatchDetailsModal({ batch, isOpen, onClose }) {
           </div>
 
           {/* Footer */}
-          <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-end">
-            <button
-              onClick={onClose}
-              className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors"
-            >
-              Close
-            </button>
+          <div className="sticky bottom-0 bg-gray-50 border-t border-gray-200 px-6 py-4 flex justify-between">
+            {onDelete && !showConfirmDelete && (
+              <button
+                onClick={handleDeleteClick}
+                className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors"
+              >
+                Delete Batch
+              </button>
+            )}
+            {showConfirmDelete && (
+              <div className="flex items-center gap-2">
+                <span className="text-sm text-gray-700">
+                  Are you sure you want to delete this batch?
+                </span>
+                <button
+                  onClick={handleConfirmDelete}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  {deleting ? "Deleting..." : "Yes, Delete"}
+                </button>
+                <button
+                  onClick={handleCancelDelete}
+                  disabled={deleting}
+                  className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors disabled:bg-gray-400 disabled:cursor-not-allowed"
+                >
+                  Cancel
+                </button>
+              </div>
+            )}
+            <div className={onDelete && !showConfirmDelete ? "" : "ml-auto"}>
+              <button
+                onClick={onClose}
+                className="px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700 transition-colors"
+              >
+                Close
+              </button>
+            </div>
           </div>
         </div>
       </div>

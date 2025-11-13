@@ -25,6 +25,7 @@ export default function SimulationPage() {
   const [speedMultiplier, setSpeedMultiplier] = useState(60);
   const [availableItems, setAvailableItems] = useState([]);
   const [purchasing, setPurchasing] = useState(false);
+  const isMovingBatchRef = useRef(false);
   const socketRef = useRef(null);
 
   // Update available items function
@@ -49,10 +50,13 @@ export default function SimulationPage() {
       });
 
       socketRef.current.on("simulation_update", (data) => {
-        setSimulation(data);
-        // Update available items from inventory
-        if (data.inventory) {
-          updateAvailableItems();
+        // Don't overwrite local state if we're in the middle of moving a batch
+        if (!isMovingBatchRef.current) {
+          setSimulation(data);
+          // Update available items from inventory
+          if (data.inventory) {
+            updateAvailableItems();
+          }
         }
       });
 
@@ -230,6 +234,57 @@ export default function SimulationPage() {
       alert(`Purchase failed: ${err.message || "Unknown error"}`);
     } finally {
       setPurchasing(false);
+    }
+  };
+
+  const handleBatchDelete = async (batchId) => {
+    if (!simulationId) return;
+    try {
+      const response = await simulationAPI.deleteBatch(simulationId, batchId);
+      if (response.success && response.data) {
+        // Update simulation state with updated batches
+        setSimulation({
+          ...simulation,
+          batches: response.data.batches || simulation.batches,
+          completedBatches:
+            response.data.completedBatches || simulation.completedBatches,
+          recentEvents: response.data.recentEvents || simulation.recentEvents,
+        });
+      }
+    } catch (err) {
+      throw new Error(err.message || "Failed to delete batch");
+    }
+  };
+
+  const handleBatchMove = async (batchId, newStartTime, newRack) => {
+    if (!simulationId) return;
+    isMovingBatchRef.current = true;
+    try {
+      const response = await simulationAPI.moveBatch(
+        simulationId,
+        batchId,
+        newStartTime,
+        newRack
+      );
+      if (response.success && response.data) {
+        // Update simulation state with updated batches
+        setSimulation({
+          ...simulation,
+          batches: response.data.batches || simulation.batches,
+          completedBatches:
+            response.data.completedBatches || simulation.completedBatches,
+          recentEvents: response.data.recentEvents || simulation.recentEvents,
+        });
+        // Small delay to ensure WebSocket doesn't overwrite immediately
+        setTimeout(() => {
+          isMovingBatchRef.current = false;
+        }, 1000);
+      } else {
+        isMovingBatchRef.current = false;
+      }
+    } catch (err) {
+      isMovingBatchRef.current = false;
+      alert(`Failed to move batch: ${err.message || "Unknown error"}`);
     }
   };
 
@@ -550,6 +605,9 @@ export default function SimulationPage() {
                   console.log("Batch clicked:", batch);
                   // You can add batch details modal or other interactions here
                 }}
+                onBatchDelete={handleBatchDelete}
+                onBatchMove={handleBatchMove}
+                canEdit={true}
                 options={{
                   hourInterval: 1,
                   minutesPerPixel: 0.3,
