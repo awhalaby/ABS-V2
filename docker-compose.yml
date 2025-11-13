@@ -25,7 +25,9 @@ services:
       - NODE_ENV=development
       - PORT=3001
       - MONGODB_URI=mongodb://mongodb:27017/bakehouse
-      - FRONTEND_URL=http://localhost:5173
+      - FRONTEND_URL=http://10.1.10.112:5173
+      # For local network access, the backend needs to listen on all interfaces
+      - HOST=0.0.0.0
     depends_on:
       mongodb:
         condition: service_healthy

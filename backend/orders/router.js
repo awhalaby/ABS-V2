@@ -5,6 +5,7 @@ import {
   getOrderStatsController,
   getDateRangesController,
   deleteOrderRangeController,
+  deleteAllOrdersController,
 } from "./controller.js";
 
 const router = express.Router();
@@ -42,5 +43,8 @@ router.get("/date-ranges", getDateRangesController);
 
 // DELETE /api/orders/range - Delete orders in date range
 router.delete("/range", deleteOrderRangeController);
+
+// DELETE /api/orders/all - Delete all orders
+router.delete("/all", deleteAllOrdersController);
 
 export default router;

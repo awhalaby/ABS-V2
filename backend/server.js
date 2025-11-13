@@ -28,11 +28,18 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3001;
+const HOST = process.env.HOST || "localhost";
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/bakehouse";
 
 // Middleware
-app.use(cors());
+// CORS configuration to allow access from other machines
+app.use(
+  cors({
+    origin: true, // Allow all origins in development. For production, specify allowed origins.
+    credentials: true,
+  })
+);
 app.use(express.json());
 app.use(express.urlencoded({ extended: true }));
 app.use(requestLogger);
@@ -98,10 +105,16 @@ async function startServer() {
     await connectDatabase(MONGODB_URI);
 
     // Start HTTP server
-    httpServer.listen(PORT, () => {
-      console.log(`🚀 Server running on http://localhost:${PORT}`);
+    httpServer.listen(PORT, HOST, () => {
+      console.log(`🚀 Server running on http://${HOST}:${PORT}`);
       console.log(`📡 WebSocket server ready`);
-      console.log(`📊 Health check: http://localhost:${PORT}/health`);
+      console.log(`📊 Health check: http://${HOST}:${PORT}/health`);
+      if (HOST === "0.0.0.0") {
+        console.log(
+          `\n🌐 For local network access, use your machine's IP address`
+        );
+        console.log(`   Example: http://192.168.1.x:${PORT}`);
+      }
     });
   } catch (error) {
     console.error("❌ Failed to start server:", error);

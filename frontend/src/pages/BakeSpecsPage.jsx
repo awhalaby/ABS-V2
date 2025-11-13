@@ -83,6 +83,13 @@ export default function BakeSpecsPage() {
           Configure how many items fit per rack, bake times, and oven
           assignments for each SKU.
         </p>
+        <div className="mt-3 bg-blue-50 border border-blue-200 rounded-lg p-3">
+          <p className="text-sm text-blue-800">
+            💡 <strong>Tip:</strong> Bake specs are automatically created with
+            default values when you load orders containing new SKUs. You can
+            edit them here to fine-tune the settings.
+          </p>
+        </div>
       </div>
 
       {error && (

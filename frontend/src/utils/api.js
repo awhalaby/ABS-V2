@@ -94,6 +94,7 @@ export const ordersAPI = {
   getDateRanges: () => api.get("/api/orders/date-ranges"),
   deleteRange: (startDate, endDate) =>
     api.delete("/api/orders/range", { params: { startDate, endDate } }),
+  deleteAll: () => api.delete("/api/orders/all"),
 };
 
 // Velocity API

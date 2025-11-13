@@ -3,15 +3,86 @@ import {
   getOrderStatistics,
   findDateRanges,
   deleteByDateRange,
+  deleteAllOrders,
 } from "./repository.js";
 import { validateOrders } from "../shared/utils/validation.js";
 import { transformOrders } from "./transformer.js";
 import { toBusinessTime, fromBusinessTime } from "../config/timezone.js";
 import { parseISO } from "date-fns";
+import { getBakeSpec, createOrUpdateBakeSpec } from "../bakespecs/service.js";
 
 /**
  * Orders service - Business logic for order operations
  */
+
+/**
+ * Auto-initialize bake specs for SKUs that don't have them yet
+ * @param {Array<Object>} orders - Array of normalized order objects
+ * @returns {Promise<Object>} Result with created and existing counts
+ */
+async function autoInitializeBakeSpecs(orders) {
+  // Extract unique SKUs from orders
+  const uniqueSKUs = new Map(); // Use Map to store itemGuid -> displayName
+
+  orders.forEach((order) => {
+    if (order.itemGuid) {
+      uniqueSKUs.set(order.itemGuid, order.displayName || order.itemGuid);
+    }
+  });
+
+  if (uniqueSKUs.size === 0) {
+    return { created: 0, existing: 0, skipped: 0 };
+  }
+
+  console.log(
+    `Found ${uniqueSKUs.size} unique SKUs in orders, checking for bake specs...`
+  );
+
+  let created = 0;
+  let existing = 0;
+  let skipped = 0;
+
+  // Check each SKU and create default bake spec if missing
+  for (const [itemGuid, displayName] of uniqueSKUs) {
+    try {
+      const existingSpec = await getBakeSpec(itemGuid);
+
+      if (existingSpec) {
+        existing++;
+        console.log(`  ✓ Bake spec exists for ${displayName} (${itemGuid})`);
+      } else {
+        // Create default bake spec with conservative values
+        const defaultBakeSpec = {
+          itemGuid,
+          displayName,
+          capacityPerRack: 12, // Conservative default
+          bakeTimeMinutes: 20, // Conservative default
+          coolTimeMinutes: 20,
+          freshWindowMinutes: 240, // 4 hours
+          restockThreshold: 12,
+          active: true,
+          parMin: 12,
+          parMax: 60,
+          // Note: oven is not set, meaning it can use any oven
+        };
+
+        await createOrUpdateBakeSpec(defaultBakeSpec);
+        created++;
+        console.log(
+          `  + Created default bake spec for ${displayName} (${itemGuid})`
+        );
+      }
+    } catch (error) {
+      console.error(
+        `  ✗ Error processing bake spec for ${displayName} (${itemGuid}):`,
+        error.message
+      );
+      skipped++;
+    }
+  }
+
+  return { created, existing, skipped, total: uniqueSKUs.size };
+}
 
 /**
  * Load orders from array
@@ -93,6 +164,10 @@ export async function loadOrders(ordersArray) {
   // Bulk insert
   const result = await bulkInsertOrders(deduplicatedOrders);
 
+  // Auto-initialize bake specs for any new SKUs found in orders
+  console.log("\nAuto-initializing bake specs for SKUs...");
+  const bakeSpecResult = await autoInitializeBakeSpecs(deduplicatedOrders);
+
   return {
     totalReceived: ordersArray.length,
     totalTransformed: flatOrders.length,
@@ -100,6 +175,12 @@ export async function loadOrders(ordersArray) {
     inserted: result.insertedCount,
     duplicates: result.duplicateCount,
     duplicateOrderIds: result.duplicates,
+    bakeSpecs: {
+      total: bakeSpecResult.total,
+      created: bakeSpecResult.created,
+      existing: bakeSpecResult.existing,
+      skipped: bakeSpecResult.skipped,
+    },
   };
 }
 
@@ -150,5 +231,17 @@ export async function deleteOrderRange(startDate, endDate) {
     startDate:
       typeof startDate === "string" ? startDate : startDate.toISOString(),
     endDate: typeof endDate === "string" ? endDate : endDate.toISOString(),
+  };
+}
+
+/**
+ * Delete all orders
+ * @returns {Promise<Object>} Delete result
+ */
+export async function deleteAllOrderData() {
+  const result = await deleteAllOrders();
+
+  return {
+    deletedCount: result.deletedCount,
   };
 }

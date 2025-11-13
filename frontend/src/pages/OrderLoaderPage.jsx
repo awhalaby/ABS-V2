@@ -16,6 +16,7 @@ export default function OrderLoaderPage() {
   const [stats, setStats] = useState(null);
   const [loadingRanges, setLoadingRanges] = useState(false);
   const [deletingRange, setDeletingRange] = useState(null);
+  const [deletingAll, setDeletingAll] = useState(false);
   const fileInputRef = useRef(null);
   const [isDragging, setIsDragging] = useState(false);
 
@@ -184,12 +185,58 @@ export default function OrderLoaderPage() {
     }
   };
 
+  // Handle delete all orders
+  const handleDeleteAll = async () => {
+    const confirmed = window.confirm(
+      "⚠️ WARNING: This will delete ALL orders in the database. This action cannot be undone.\n\nAre you absolutely sure you want to continue?"
+    );
+
+    if (!confirmed) {
+      return;
+    }
+
+    // Double confirmation for safety
+    const doubleConfirmed = window.confirm(
+      `Final confirmation: This will permanently delete ALL ${dateRanges.reduce(
+        (sum, r) => sum + r.orderCount,
+        0
+      )} orders across ${
+        dateRanges.length
+      } date range(s).\n\nClick OK to proceed with deletion.`
+    );
+
+    if (!doubleConfirmed) {
+      return;
+    }
+
+    setDeletingAll(true);
+    setError(null);
+
+    try {
+      const response = await ordersAPI.deleteAll();
+      await loadDateRanges();
+      setError(null);
+      // Show success message
+      alert(
+        `Successfully deleted all ${formatNumber(
+          response.data.deletedCount
+        )} orders.`
+      );
+    } catch (err) {
+      setError(err.message || "Failed to delete all orders");
+    } finally {
+      setDeletingAll(false);
+    }
+  };
+
   return (
     <div className="px-4 py-6 sm:px-0">
       <div className="mb-6">
         <h2 className="text-2xl font-bold text-gray-900 mb-2">Order Loader</h2>
         <p className="text-gray-600">
           Upload JSON files containing order data to import into the system.
+          Bake specs will be automatically created for any new SKUs found in the
+          orders.
         </p>
       </div>
 
@@ -343,6 +390,35 @@ export default function OrderLoaderPage() {
                   Duplicates skipped: {formatNumber(uploadResult.duplicates)}
                 </p>
               )}
+              {uploadResult.bakeSpecs && (
+                <div className="mt-3 pt-3 border-t border-green-300">
+                  <p className="font-medium mb-1">
+                    Bake Specs Auto-Initialization:
+                  </p>
+                  <p>
+                    Total SKUs found:{" "}
+                    {formatNumber(uploadResult.bakeSpecs.total)}
+                  </p>
+                  {uploadResult.bakeSpecs.created > 0 && (
+                    <p className="text-green-900">
+                      ✓ Created {formatNumber(uploadResult.bakeSpecs.created)}{" "}
+                      new bake spec(s)
+                    </p>
+                  )}
+                  {uploadResult.bakeSpecs.existing > 0 && (
+                    <p>
+                      {formatNumber(uploadResult.bakeSpecs.existing)} bake
+                      spec(s) already existed
+                    </p>
+                  )}
+                  {uploadResult.bakeSpecs.skipped > 0 && (
+                    <p className="text-yellow-700">
+                      ⚠ Skipped {formatNumber(uploadResult.bakeSpecs.skipped)}{" "}
+                      due to errors
+                    </p>
+                  )}
+                </div>
+              )}
             </div>
           </div>
         )}
@@ -455,13 +531,24 @@ export default function OrderLoaderPage() {
           <h3 className="text-lg font-medium text-gray-900">
             Existing Date Ranges
           </h3>
-          <button
-            onClick={loadDateRanges}
-            disabled={loadingRanges}
-            className="text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400"
-          >
-            {loadingRanges ? "Loading..." : "Refresh"}
-          </button>
+          <div className="flex gap-3">
+            <button
+              onClick={loadDateRanges}
+              disabled={loadingRanges}
+              className="text-sm text-blue-600 hover:text-blue-800 disabled:text-gray-400"
+            >
+              {loadingRanges ? "Loading..." : "Refresh"}
+            </button>
+            {dateRanges.length > 0 && (
+              <button
+                onClick={handleDeleteAll}
+                disabled={deletingAll || loadingRanges}
+                className="text-sm text-red-600 hover:text-red-800 disabled:text-gray-400 font-medium"
+              >
+                {deletingAll ? "Deleting..." : "Delete All Orders"}
+              </button>
+            )}
+          </div>
         </div>
 
         {loadingRanges ? (

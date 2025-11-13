@@ -3,6 +3,7 @@ import {
   getOrderStats,
   getAvailableDateRanges,
   deleteOrderRange,
+  deleteAllOrderData,
 } from "./service.js";
 import { asyncHandler } from "../shared/middleware/errorHandler.js";
 
@@ -119,5 +120,19 @@ export const deleteOrderRangeController = asyncHandler(async (req, res) => {
     success: true,
     data: result,
     message: `Deleted ${result.deletedCount} orders`,
+  });
+});
+
+/**
+ * Delete all orders
+ * DELETE /api/orders/all
+ */
+export const deleteAllOrdersController = asyncHandler(async (req, res) => {
+  const result = await deleteAllOrderData();
+
+  res.status(200).json({
+    success: true,
+    data: result,
+    message: `Deleted all ${result.deletedCount} orders`,
   });
 });

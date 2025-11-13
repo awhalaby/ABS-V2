@@ -153,7 +153,7 @@ function calculateTimeIntervalPatterns(historicalData, intervalMinutes = 10) {
 
     if (!skuDayIntervalData[skuKey][dayOfWeek]) {
       skuDayIntervalData[skuKey][dayOfWeek] = {};
-      skuDayUniqueDays[skuKey][dayOfWeek] = {};
+      skuDayUniqueDays[skuKey][dayOfWeek] = new Set();
     }
 
     if (!skuDayIntervalData[skuKey][dayOfWeek][intervalStart]) {

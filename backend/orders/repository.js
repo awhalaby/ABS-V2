@@ -218,6 +218,20 @@ export async function deleteByDateRange(startDate, endDate) {
 }
 
 /**
+ * Delete all orders
+ * @returns {Promise<Object>} Delete result
+ */
+export async function deleteAllOrders() {
+  const collection = getCollection(COLLECTIONS.MENU_ITEMS);
+
+  const result = await collection.deleteMany({});
+
+  return {
+    deletedCount: result.deletedCount,
+  };
+}
+
+/**
  * Get orders for a date range (for preview/validation)
  * @param {Date|string} startDate - Start date
  * @param {Date|string} endDate - End date
