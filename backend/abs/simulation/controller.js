@@ -16,7 +16,8 @@ import {
  * POST /api/abs/simulation/start
  */
 export const startSimulationController = asyncHandler(async (req, res) => {
-  const { scheduleDate, speedMultiplier, mode } = req.body;
+  const { scheduleDate, speedMultiplier, mode, forecastScale, forecastScales } =
+    req.body;
 
   if (!scheduleDate) {
     return res.status(400).json({
@@ -36,10 +37,29 @@ export const startSimulationController = asyncHandler(async (req, res) => {
     });
   }
 
+  // Support both old forecastScale (single value) and new forecastScales (period-based)
+  let finalForecastScales = null;
+  if (forecastScales) {
+    finalForecastScales = {
+      morning: Number(forecastScales.morning) || 1.0,
+      afternoon: Number(forecastScales.afternoon) || 1.0,
+      evening: Number(forecastScales.evening) || 1.0,
+    };
+  } else if (forecastScale !== undefined) {
+    // Legacy support: apply single scale to all periods
+    const scale = Number(forecastScale);
+    finalForecastScales = {
+      morning: scale,
+      afternoon: scale,
+      evening: scale,
+    };
+  }
+
   const simulation = await startSimulation({
     scheduleDate,
     speedMultiplier: speedMultiplier || 60,
     mode: mode || "manual",
+    forecastScales: finalForecastScales,
   });
 
   res.status(200).json({
@@ -281,7 +301,7 @@ export const getAvailableDatesController = asyncHandler(async (req, res) => {
   const { COLLECTIONS } = await import("../../config/constants.js");
   const collection = getCollection(COLLECTIONS.MENU_ITEMS);
 
-  // Aggregate order counts per date
+  // Aggregate total quantities per date (sum of all item quantities)
   const pipeline = [
     {
       $group: {
@@ -292,15 +312,13 @@ export const getAvailableDatesController = asyncHandler(async (req, res) => {
             timezone: "America/New_York",
           },
         },
-        orderCount: { $addToSet: "$orderId" },
-        itemCount: { $sum: "$quantity" },
+        itemCount: { $sum: "$quantity" }, // Sum of all item quantities
       },
     },
     {
       $project: {
         _id: 0,
         date: "$_id",
-        orderCount: { $size: "$orderCount" },
         itemCount: 1,
       },
     },

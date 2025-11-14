@@ -83,7 +83,7 @@ export async function getScheduledOrders(startDate, endDate) {
 export async function getCachedForecast(params) {
   const collection = getCollection(COLLECTIONS.FORECASTS);
 
-  // Create cache key from parameters
+  // Create cache key from parameters (include timeIntervalMinutes for proper cache separation)
   const cacheKey = JSON.stringify({
     forecastType: params.forecastType,
     startDate: params.startDate,
@@ -91,6 +91,7 @@ export async function getCachedForecast(params) {
     increment: params.increment,
     growthRate: params.growthRate,
     lookbackWeeks: params.lookbackWeeks,
+    timeIntervalMinutes: params.timeIntervalMinutes || null,
   });
 
   const cached = await collection.findOne({
@@ -122,6 +123,10 @@ export async function saveForecastCache(params, data) {
       "parameters.increment": params.increment,
       "parameters.growthRate": params.growthRate,
       "parameters.lookbackWeeks": params.lookbackWeeks,
+      "parameters.timeIntervalMinutes":
+        params.timeIntervalMinutes !== undefined
+          ? params.timeIntervalMinutes
+          : null,
     },
     {
       $set: {

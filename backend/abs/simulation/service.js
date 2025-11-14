@@ -13,6 +13,7 @@ import { v4 as uuidv4 } from "uuid";
 import { getOrdersByDateRange } from "../../orders/repository.js";
 import { toBusinessTime } from "../../config/timezone.js";
 import { generateSchedule, getDefaultScheduleParams } from "../service.js";
+import { getForecast } from "../../forecast/service.js";
 
 /**
  * Simulation Service - Runs schedule simulations in real-time
@@ -51,9 +52,9 @@ export class SimulationState {
       batchesAvailable: 0,
       totalInventory: 0,
       peakInventory: 0,
-      ordersProcessed: 0,
-      ordersTotal: 0,
-      ordersMissed: 0,
+      itemsProcessed: 0,
+      itemsTotal: 0,
+      itemsMissed: 0,
     };
 
     // Track missed orders by item for stockout reporting
@@ -113,17 +114,117 @@ export class SimulationState {
  * @returns {Promise<SimulationState>} Simulation state
  */
 export async function startSimulation(config) {
-  const { scheduleDate, speedMultiplier = 60, mode = "manual" } = config;
+  const {
+    scheduleDate,
+    speedMultiplier = 60,
+    mode = "manual",
+    forecastScales = null,
+  } = config;
 
   if (!scheduleDate) {
     throw new Error("scheduleDate is required");
   }
 
   // Load schedule, auto-generate if it doesn't exist
+  // If forecastScales is provided, regenerate schedule with period-based scaled forecast
   let schedule = await getScheduleByDate(scheduleDate);
   let scheduleId = null;
-  if (!schedule) {
-    // Auto-generate schedule with default parameters
+
+  // Period boundaries (minutes from start of day)
+  const PERIOD_BOUNDARIES = {
+    MORNING_START: 360, // 06:00
+    MORNING_END: 660, // 11:00
+    AFTERNOON_END: 840, // 14:00
+    EVENING_END: 1020, // 17:00
+  };
+
+  // Regenerate schedule if forecastScales is provided (even if schedule exists)
+  if (forecastScales !== null && forecastScales !== undefined) {
+    try {
+      const defaultParams = getDefaultScheduleParams();
+
+      // Generate forecast first
+      const forecastData = await getForecast({
+        startDate: scheduleDate,
+        endDate: scheduleDate,
+        increment: "day",
+        growthRate: defaultParams.forecastParams.growthRate,
+        lookbackWeeks: defaultParams.forecastParams.lookbackWeeks,
+        timeIntervalMinutes: defaultParams.forecastParams.timeIntervalMinutes,
+      });
+
+      // Scale time-interval forecast based on period
+      if (
+        forecastData.timeIntervalForecast &&
+        forecastData.timeIntervalForecast.length > 0
+      ) {
+        forecastData.timeIntervalForecast =
+          forecastData.timeIntervalForecast.map((item) => {
+            const timeInterval = item.timeInterval;
+            let scale = 1.0;
+
+            if (
+              timeInterval >= PERIOD_BOUNDARIES.MORNING_START &&
+              timeInterval < PERIOD_BOUNDARIES.MORNING_END
+            ) {
+              scale = forecastScales.morning;
+            } else if (
+              timeInterval >= PERIOD_BOUNDARIES.MORNING_END &&
+              timeInterval < PERIOD_BOUNDARIES.AFTERNOON_END
+            ) {
+              scale = forecastScales.afternoon;
+            } else if (
+              timeInterval >= PERIOD_BOUNDARIES.AFTERNOON_END &&
+              timeInterval < PERIOD_BOUNDARIES.EVENING_END
+            ) {
+              scale = forecastScales.evening;
+            }
+
+            return {
+              ...item,
+              forecast: Math.round(item.forecast * scale),
+            };
+          });
+
+        // Also scale daily forecast proportionally
+        // Calculate total scaled forecast
+        const scaledTotal = forecastData.timeIntervalForecast.reduce(
+          (sum, item) => sum + item.forecast,
+          0
+        );
+        const originalTotal = forecastData.dailyForecast.reduce(
+          (sum, item) => sum + (item.forecast || 0),
+          0
+        );
+
+        if (originalTotal > 0) {
+          const dailyScale = scaledTotal / originalTotal;
+          forecastData.dailyForecast = forecastData.dailyForecast.map(
+            (item) => ({
+              ...item,
+              forecast: Math.round(item.forecast * dailyScale),
+            })
+          );
+        }
+      }
+
+      // Generate schedule with scaled forecast
+      schedule = await generateSchedule({
+        date: scheduleDate,
+        forecastData: forecastData,
+        restockThreshold: defaultParams.restockThreshold,
+        targetEndInventory: defaultParams.targetEndInventory,
+      });
+
+      // After generating, reload to get the _id
+      schedule = await getScheduleByDate(scheduleDate);
+    } catch (error) {
+      throw new Error(
+        `Failed to generate schedule with forecast scales: ${error.message}`
+      );
+    }
+  } else if (!schedule) {
+    // Auto-generate schedule with default parameters (no scale)
     try {
       const defaultParams = getDefaultScheduleParams();
       schedule = await generateSchedule({
@@ -188,7 +289,11 @@ export async function startSimulation(config) {
     presetOrders,
   });
 
-  simulation.stats.ordersTotal = presetOrders.length;
+  // Sum total item quantities (not count of records)
+  simulation.stats.itemsTotal = presetOrders.reduce(
+    (sum, order) => sum + (order.quantity || 0),
+    0
+  );
 
   // Store forecast data from schedule for chart
   simulation.forecast = schedule.forecast || [];
@@ -366,7 +471,7 @@ export function updateSimulation(simulationId) {
           // Process order - decrease inventory
           const newInventory = availableInventory - requestedQuantity;
           simulation.inventory.set(order.itemGuid, newInventory);
-          simulation.stats.ordersProcessed++;
+          simulation.stats.itemsProcessed += requestedQuantity; // Sum quantities, not count records
           simulation.stats.totalInventory = Array.from(
             simulation.inventory.values()
           ).reduce((sum, qty) => sum + qty, 0);
@@ -410,7 +515,7 @@ export function updateSimulation(simulationId) {
           // Not enough inventory - log as missed order
           // Still mark as processed so we don't keep trying
           simulation.processedOrders.add(orderKey);
-          simulation.stats.ordersMissed++;
+          simulation.stats.itemsMissed += requestedQuantity; // Sum quantities, not count records
 
           // Track missed order by item
           if (!simulation.missedOrders.has(order.itemGuid)) {

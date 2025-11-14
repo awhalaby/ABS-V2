@@ -23,6 +23,11 @@ export default function SimulationPage() {
   const [simulationId, setSimulationId] = useState(null);
   const [simulation, setSimulation] = useState(null);
   const [speedMultiplier, setSpeedMultiplier] = useState(60);
+  const [forecastScales, setForecastScales] = useState({
+    morning: 100, // 06:00-11:00
+    afternoon: 100, // 11:00-14:00
+    evening: 100, // 14:00-17:00
+  });
   const [availableItems, setAvailableItems] = useState([]);
   const [purchasing, setPurchasing] = useState(false);
   const isMovingBatchRef = useRef(false);
@@ -148,6 +153,11 @@ export default function SimulationPage() {
         scheduleDate,
         speedMultiplier,
         mode,
+        forecastScales: {
+          morning: forecastScales.morning / 100,
+          afternoon: forecastScales.afternoon / 100,
+          evening: forecastScales.evening / 100,
+        },
       });
       setSimulationId(response.data.id);
       setSimulation(response.data);
@@ -368,8 +378,8 @@ export default function SimulationPage() {
                   ) : (
                     availableDates.map((dateInfo) => (
                       <option key={dateInfo.date} value={dateInfo.date}>
-                        {dateInfo.date} ({formatNumber(dateInfo.orderCount)}{" "}
-                        orders)
+                        {dateInfo.date} ({formatNumber(dateInfo.itemCount)}{" "}
+                        items)
                       </option>
                     ))
                   )}
@@ -389,8 +399,8 @@ export default function SimulationPage() {
               </label>
               <input
                 type="range"
-                min="30"
-                max="600"
+                min="1"
+                max="2400"
                 step="30"
                 value={speedMultiplier}
                 onChange={(e) =>
@@ -399,11 +409,111 @@ export default function SimulationPage() {
                 className="w-full"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-1">
-                <span>30x</span>
-                <span>120x</span>
-                <span>300x</span>
-                <span>600x</span>
+                <span>1x</span>
+
+                <span>2400x</span>
               </div>
+            </div>
+            <div>
+              <label className="block text-sm font-medium text-gray-700 mb-3">
+                Forecast Scale by Period
+              </label>
+              <div className="grid grid-cols-3 gap-4">
+                {/* Morning Slider */}
+                <div className="flex flex-col items-center">
+                  <label className="text-xs font-medium text-gray-600 mb-2">
+                    Morning
+                  </label>
+                  <label className="text-xs text-gray-500 mb-1">
+                    06:00-11:00
+                  </label>
+                  <div className="relative flex flex-col items-center h-48">
+                    <input
+                      type="range"
+                      min="50"
+                      max="200"
+                      step="5"
+                      value={forecastScales.morning}
+                      onChange={(e) =>
+                        setForecastScales({
+                          ...forecastScales,
+                          morning: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
+                      style={{ writingMode: "vertical-lr" }}
+                    />
+                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                      {forecastScales.morning}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Afternoon Slider */}
+                <div className="flex flex-col items-center">
+                  <label className="text-xs font-medium text-gray-600 mb-2">
+                    Afternoon
+                  </label>
+                  <label className="text-xs text-gray-500 mb-1">
+                    11:00-14:00
+                  </label>
+                  <div className="relative flex flex-col items-center h-48">
+                    <input
+                      type="range"
+                      min="50"
+                      max="200"
+                      step="5"
+                      value={forecastScales.afternoon}
+                      onChange={(e) =>
+                        setForecastScales({
+                          ...forecastScales,
+                          afternoon: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
+                      style={{ writingMode: "vertical-lr" }}
+                    />
+                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                      {forecastScales.afternoon}%
+                    </div>
+                  </div>
+                </div>
+
+                {/* Evening Slider */}
+                <div className="flex flex-col items-center">
+                  <label className="text-xs font-medium text-gray-600 mb-2">
+                    Evening
+                  </label>
+                  <label className="text-xs text-gray-500 mb-1">
+                    14:00-17:00
+                  </label>
+                  <div className="relative flex flex-col items-center h-48">
+                    <input
+                      type="range"
+                      min="50"
+                      max="200"
+                      step="5"
+                      value={forecastScales.evening}
+                      onChange={(e) =>
+                        setForecastScales({
+                          ...forecastScales,
+                          evening: parseInt(e.target.value, 10),
+                        })
+                      }
+                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
+                      style={{ writingMode: "vertical-lr" }}
+                    />
+                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                      {forecastScales.evening}%
+                    </div>
+                  </div>
+                </div>
+              </div>
+              <p className="mt-3 text-sm text-gray-500 text-center">
+                Adjust forecast demand by time period to test different
+                scenarios. This will regenerate the schedule with scaled
+                batches.
+              </p>
             </div>
             <button
               onClick={handleStart}
@@ -520,10 +630,10 @@ export default function SimulationPage() {
                   </div>
                   {simulation.mode === "preset" && (
                     <div>
-                      <p className="text-sm text-gray-500">Orders Processed</p>
+                      <p className="text-sm text-gray-500">Items Processed</p>
                       <p className="text-xl font-bold text-green-600">
-                        {formatNumber(simulation.stats.ordersProcessed || 0)} /{" "}
-                        {formatNumber(simulation.stats.ordersTotal || 0)}
+                        {formatNumber(simulation.stats.itemsProcessed || 0)} /{" "}
+                        {formatNumber(simulation.stats.itemsTotal || 0)}
                       </p>
                     </div>
                   )}
@@ -538,13 +648,15 @@ export default function SimulationPage() {
             )}
           </div>
 
-          {/* Second Row: Expected and Actual Orders Side by Side */}
+          {/* Second Row: Planned and Actual Orders Side by Side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Expected Orders / Forecast */}
-            {(simulation.forecast || simulation.timeIntervalForecast) && (
+            {/* Planned Items from Scheduled Batches */}
+            {((simulation.batches && simulation.batches.length > 0) ||
+              (simulation.completedBatches &&
+                simulation.completedBatches.length > 0)) && (
               <ExpectedOrders
-                forecast={simulation.forecast || []}
-                timeIntervalForecast={simulation.timeIntervalForecast || []}
+                batches={simulation.batches || []}
+                completedBatches={simulation.completedBatches || []}
               />
             )}
 
@@ -683,17 +795,17 @@ export default function SimulationPage() {
                 </h3>
                 <div className="space-y-2">
                   <div className="flex justify-between items-center">
-                    <span className="text-sm text-gray-600">Total Orders</span>
+                    <span className="text-sm text-gray-600">Total Items</span>
                     <span className="text-lg font-bold text-gray-900">
-                      {formatNumber(simulation.stats.ordersTotal || 0)}
+                      {formatNumber(simulation.stats.itemsTotal || 0)}
                     </span>
                   </div>
                   <div className="flex justify-between items-center">
                     <span className="text-sm text-gray-600">
-                      Orders Processed
+                      Items Processed
                     </span>
                     <span className="text-lg font-bold text-green-600">
-                      {formatNumber(simulation.stats.ordersProcessed || 0)}
+                      {formatNumber(simulation.stats.itemsProcessed || 0)}
                     </span>
                   </div>
                   <div className="w-full bg-gray-200 rounded-full h-2.5 mt-4">
@@ -701,9 +813,9 @@ export default function SimulationPage() {
                       className="bg-green-600 h-2.5 rounded-full transition-all"
                       style={{
                         width: `${
-                          simulation.stats.ordersTotal > 0
-                            ? (simulation.stats.ordersProcessed /
-                                simulation.stats.ordersTotal) *
+                          simulation.stats.itemsTotal > 0
+                            ? (simulation.stats.itemsProcessed /
+                                simulation.stats.itemsTotal) *
                               100
                             : 0
                         }%`,
@@ -711,8 +823,8 @@ export default function SimulationPage() {
                     ></div>
                   </div>
                   <p className="text-xs text-gray-500 mt-2">
-                    Orders are automatically processed when inventory becomes
-                    available. Missed orders are logged in Recent Events.
+                    Items are automatically processed when inventory becomes
+                    available. Missed items are logged in Recent Events.
                   </p>
                 </div>
               </div>

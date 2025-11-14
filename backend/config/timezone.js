@@ -66,10 +66,40 @@ export function getMongoTimezone() {
 /**
  * Normalize date to start of day in business timezone
  * @param {Date|string} date - Date to normalize
- * @returns {Date} Start of day in business timezone
+ * @returns {Date} Start of day in business timezone (as UTC)
  */
 export function startOfBusinessDay(date) {
-  const dateObj = typeof date === "string" ? parseISO(date) : date;
+  let dateObj;
+  if (typeof date === "string") {
+    // If it's a date-only string (YYYY-MM-DD), parse it as midnight in business timezone
+    // Otherwise, use parseISO which handles ISO strings with time
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      // Date-only string: interpret as start of day in business timezone
+      // Parse date components
+      const [year, month, day] = date.split("-").map(Number);
+      // Create a date string representing midnight in business timezone
+      // We need to interpret this date as being in the business timezone, not UTC
+      // Use zonedTimeToUtc: it takes a date/time and interprets it as being in the given timezone
+      // Create a date representing the time in business timezone, then convert to UTC
+      const dateStr = `${year}-${String(month).padStart(2, "0")}-${String(
+        day
+      ).padStart(2, "0")}T00:00:00`;
+      // Parse as if it's a naive datetime (no timezone), then interpret as business timezone
+      // We'll create a Date object and use zonedTimeToUtc to interpret it as business timezone
+      // Actually, we need to create the date in business timezone first
+      // The correct approach: create date components, build a date in business timezone, convert to UTC
+      const tempDate = new Date(year, month - 1, day, 0, 0, 0, 0);
+      // tempDate is in server's local timezone, but we want it interpreted as business timezone
+      // Get the UTC equivalent of this time if it were in business timezone
+      // Use zonedTimeToUtc: it interprets the date as if it's in the given timezone
+      dateObj = zonedTimeToUtc(tempDate, BUSINESS_TIMEZONE);
+    } else {
+      dateObj = parseISO(date);
+    }
+  } else {
+    dateObj = date;
+  }
+  // For Date objects or ISO strings with time, use the existing logic
   const businessDate = toBusinessTime(dateObj);
   const startOfDay = new Date(businessDate);
   startOfDay.setHours(0, 0, 0, 0);
@@ -79,10 +109,38 @@ export function startOfBusinessDay(date) {
 /**
  * Normalize date to end of day in business timezone
  * @param {Date|string} date - Date to normalize
- * @returns {Date} End of day in business timezone
+ * @returns {Date} End of day in business timezone (as UTC)
  */
 export function endOfBusinessDay(date) {
-  const dateObj = typeof date === "string" ? parseISO(date) : date;
+  let dateObj;
+  if (typeof date === "string") {
+    // If it's a date-only string (YYYY-MM-DD), parse it as end of day in business timezone
+    // Otherwise, use parseISO which handles ISO strings with time
+    if (/^\d{4}-\d{2}-\d{2}$/.test(date)) {
+      // Date-only string: interpret as end of day in business timezone
+      // Strategy: Get start of next day in business timezone, convert to UTC, then subtract 1ms
+      const [year, month, day] = date.split("-").map(Number);
+      // Calculate next day (handling month/year rollover)
+      const nextDayDate = new Date(year, month - 1, day + 1);
+      const nextYear = nextDayDate.getFullYear();
+      const nextMonth = nextDayDate.getMonth() + 1;
+      const nextDay = nextDayDate.getDate();
+
+      // Get start of next day using startOfBusinessDay (which handles timezone correctly)
+      const nextDayStart = startOfBusinessDay(
+        `${nextYear}-${String(nextMonth).padStart(2, "0")}-${String(
+          nextDay
+        ).padStart(2, "0")}`
+      );
+      // Subtract 1ms to get end of current day (inclusive)
+      dateObj = new Date(nextDayStart.getTime() - 1);
+    } else {
+      dateObj = parseISO(date);
+    }
+  } else {
+    dateObj = date;
+  }
+  // For Date objects or ISO strings with time, use the existing logic
   const businessDate = toBusinessTime(dateObj);
   const endOfDay = new Date(businessDate);
   endOfDay.setHours(23, 59, 59, 999);

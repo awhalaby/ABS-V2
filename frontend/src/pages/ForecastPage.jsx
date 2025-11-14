@@ -142,11 +142,22 @@ export default function ForecastPage() {
                 </h3>
                 <VelocityChart
                   type="line"
-                  data={forecastData.dailyForecast.map((d) => ({
-                    date: formatDateFns(parseISO(d.date), "MMM dd"),
-                    forecast: d.forecast,
-                    sku: d.displayName || d.sku,
-                  }))}
+                  data={forecastData.dailyForecast
+                    .sort((a, b) => {
+                      // Sort by actual date before formatting
+                      const dateA = parseISO(a.date);
+                      const dateB = parseISO(b.date);
+                      return dateA.getTime() - dateB.getTime();
+                    })
+                    .map((d) => {
+                      const dateObj = parseISO(d.date);
+                      return {
+                        date: formatDateFns(dateObj, "MMM dd"),
+                        _originalDate: d.date, // Keep original for sorting in chart
+                        forecast: d.forecast,
+                        sku: d.displayName || d.sku,
+                      };
+                    })}
                   xKey="date"
                   yKey="forecast"
                   labelKey="sku"

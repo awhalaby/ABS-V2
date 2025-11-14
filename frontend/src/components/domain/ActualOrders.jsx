@@ -98,8 +98,7 @@ export default function ActualOrders({ processedOrdersByItem = [] }) {
           Actual Orders
         </h3>
         <div className="text-center py-8 text-gray-500">
-          No orders processed yet. Orders will appear here as they are
-          fulfilled.
+          No items processed yet. Items will appear here as they are fulfilled.
         </div>
       </div>
     );

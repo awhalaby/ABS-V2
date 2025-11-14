@@ -54,15 +54,44 @@ export default function VelocityChart({
       const uniqueLabels = new Set();
       const uniqueXValues = new Set();
 
-      // Collect all unique labels and x-values
+      // Collect all unique labels and x-values, tracking original dates for sorting
+      const xValueToOriginalDate = new Map();
       data.forEach((item) => {
         const label = item[labelKey];
         uniqueLabels.add(label);
         uniqueXValues.add(item[xKey]);
+        // Track original date for this x-value if available
+        if (item._originalDate && !xValueToOriginalDate.has(item[xKey])) {
+          xValueToOriginalDate.set(item[xKey], item._originalDate);
+        }
       });
 
       // Sort x-values for proper ordering
-      const sortedXValues = Array.from(uniqueXValues).sort();
+      // Use original dates if available, otherwise fall back to string comparison
+      const sortedXValues = Array.from(uniqueXValues).sort((a, b) => {
+        // If both have original dates, sort by those
+        const originalDateA = xValueToOriginalDate.get(a);
+        const originalDateB = xValueToOriginalDate.get(b);
+
+        if (originalDateA && originalDateB) {
+          const dateA = new Date(originalDateA);
+          const dateB = new Date(originalDateB);
+          if (!isNaN(dateA.getTime()) && !isNaN(dateB.getTime())) {
+            return dateA.getTime() - dateB.getTime();
+          }
+        }
+
+        // Check if values look like "MMM dd" format (e.g., "Dec 01", "Nov 15")
+        const datePattern = /^[A-Za-z]{3} \d{1,2}$/;
+        if (datePattern.test(a) && datePattern.test(b)) {
+          // For date strings without original dates, use string comparison
+          // (This should only happen if data wasn't pre-sorted)
+          return a.localeCompare(b);
+        }
+
+        // Default string comparison
+        return a.localeCompare(b);
+      });
 
       const datasets = Array.from(uniqueLabels).map((label, idx) => {
         const colors = [

@@ -3,9 +3,11 @@
  */
 
 // API Configuration
-// Hardcoded for network access - change this IP if your network changes
-export const API_BASE_URL = "http://10.1.10.112:3001";
-export const WEBSOCKET_URL = "http://10.1.10.112:3001";
+// Use environment variables for production, fallback to local network for development
+export const API_BASE_URL =
+  import.meta.env.VITE_API_URL || "http://10.1.10.112:3001";
+export const WEBSOCKET_URL =
+  import.meta.env.VITE_WEBSOCKET_URL || "http://10.1.10.112:3001";
 
 // Business Configuration
 export const BUSINESS_TIMEZONE = "America/New_York";

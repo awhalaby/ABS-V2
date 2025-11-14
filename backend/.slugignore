@@ -1,0 +1,7 @@
+test-*.js
+*.test.js
+__tests__/
+coverage/
+.env.local
+.env.development
+

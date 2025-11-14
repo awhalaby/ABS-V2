@@ -623,7 +623,13 @@ function scheduleBatches(batches, date) {
  * @returns {Promise<Object>} Generated schedule
  */
 export async function generateSchedule(params) {
-  const { date, forecastParams, restockThreshold, targetEndInventory } = params;
+  const {
+    date,
+    forecastParams,
+    restockThreshold,
+    targetEndInventory,
+    forecastData: providedForecastData,
+  } = params;
 
   if (!date) {
     throw new Error("Date is required");
@@ -655,15 +661,18 @@ export async function generateSchedule(params) {
     }
   }
 
-  // Get forecast data with time-interval granularity
-  const forecastData = await getForecast({
-    startDate: dateStr,
-    endDate: dateStr,
-    increment: "day",
-    growthRate: finalForecastParams.growthRate,
-    lookbackWeeks: finalForecastParams.lookbackWeeks,
-    timeIntervalMinutes: finalForecastParams.timeIntervalMinutes,
-  });
+  // Get forecast data with time-interval granularity (or use provided)
+  let forecastData = providedForecastData;
+  if (!forecastData) {
+    forecastData = await getForecast({
+      startDate: dateStr,
+      endDate: dateStr,
+      increment: "day",
+      growthRate: finalForecastParams.growthRate,
+      lookbackWeeks: finalForecastParams.lookbackWeeks,
+      timeIntervalMinutes: finalForecastParams.timeIntervalMinutes,
+    });
+  }
 
   if (
     !forecastData ||
