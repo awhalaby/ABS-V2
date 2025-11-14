@@ -73,6 +73,12 @@ export const startSimulationController = asyncHandler(async (req, res) => {
       currentTime: formatMinutesToTime(simulation.currentTime),
       stats: simulation.stats,
       inventory: Object.fromEntries(simulation.inventory),
+      inventoryUnits: Object.fromEntries(
+        Array.from(simulation.inventoryUnits.entries()).map(([key, units]) => [
+          key,
+          units,
+        ])
+      ), // Send actual remaining units for FIFO display
       batches: simulation.batches.map((b) => ({
         batchId: b.batchId,
         displayName: b.displayName,
@@ -96,6 +102,7 @@ export const startSimulationController = asyncHandler(async (req, res) => {
         startTime: b.startTime,
         endTime: b.endTime,
         availableTime: b.availableTime,
+        availableAt: b.availableAt, // Include availableAt (minutes) for freshness tracking
       })),
       forecast: simulation.forecast || [],
       presetOrders: simulation.presetOrders.map((order) => ({
@@ -146,6 +153,12 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
       currentTime: formatMinutesToTime(simulation.currentTime),
       stats: simulation.stats,
       inventory: Object.fromEntries(simulation.inventory),
+      inventoryUnits: Object.fromEntries(
+        Array.from(simulation.inventoryUnits.entries()).map(([key, units]) => [
+          key,
+          units,
+        ])
+      ), // Send actual remaining units for FIFO display
       batches: simulation.batches.map((b) => ({
         batchId: b.batchId,
         displayName: b.displayName,
@@ -169,6 +182,7 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
         startTime: b.startTime,
         endTime: b.endTime,
         availableTime: b.availableTime,
+        availableAt: b.availableAt, // Include availableAt (minutes) for freshness tracking
       })),
       forecast: simulation.forecast || [],
       recentEvents: simulation.events.slice(-10), // Last 10 events
@@ -205,6 +219,12 @@ export const getSimulationResultsController = asyncHandler(async (req, res) => {
       status: simulation.status,
       stats: simulation.stats,
       inventory: Object.fromEntries(simulation.inventory),
+      inventoryUnits: Object.fromEntries(
+        Array.from(simulation.inventoryUnits.entries()).map(([key, units]) => [
+          key,
+          units,
+        ])
+      ), // Send actual remaining units for FIFO display
       completedBatches: simulation.completedBatches,
       events: simulation.events,
     },
@@ -397,6 +417,7 @@ export const moveSimulationBatchController = asyncHandler(async (req, res) => {
         startTime: b.startTime,
         endTime: b.endTime,
         availableTime: b.availableTime,
+        availableAt: b.availableAt, // Include availableAt (minutes) for freshness tracking
       })),
       recentEvents: simulation.events.slice(-10),
     },

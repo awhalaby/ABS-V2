@@ -1,5 +1,5 @@
 import { useState, useEffect, useRef } from "react";
-import { simulationAPI } from "../utils/api.js";
+import { simulationAPI, bakespecsAPI } from "../utils/api.js";
 import { formatTime, formatNumber } from "../utils/formatters.js";
 import { format as formatDateFns, addDays } from "date-fns";
 import { io } from "socket.io-client";
@@ -10,6 +10,7 @@ import TimelineView from "../components/domain/TimelineView.jsx";
 import ExpectedOrders from "../components/domain/ExpectedOrders.jsx";
 import Stockout from "../components/domain/Stockout.jsx";
 import ActualOrders from "../components/domain/ActualOrders.jsx";
+import VisualInventory from "../components/domain/VisualInventory.jsx";
 
 export default function SimulationPage() {
   const [loading, setLoading] = useState(false);
@@ -30,6 +31,7 @@ export default function SimulationPage() {
   });
   const [availableItems, setAvailableItems] = useState([]);
   const [purchasing, setPurchasing] = useState(false);
+  const [bakeSpecs, setBakeSpecs] = useState([]);
   const isMovingBatchRef = useRef(false);
   const socketRef = useRef(null);
 
@@ -93,6 +95,19 @@ export default function SimulationPage() {
       };
     }
   }, [simulationId]);
+
+  // Load bake specs for freshness windows
+  useEffect(() => {
+    const loadBakeSpecs = async () => {
+      try {
+        const response = await bakespecsAPI.getAll();
+        setBakeSpecs(response.data || []);
+      } catch (err) {
+        console.error("Failed to load bake specs:", err);
+      }
+    };
+    loadBakeSpecs();
+  }, []);
 
   // Poll for simulation status if not using WebSocket
   useEffect(() => {
@@ -672,58 +687,7 @@ export default function SimulationPage() {
             )}
           </div>
 
-          {/* Second Row: Planned and Actual Orders Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Planned Items from Scheduled Batches */}
-            {((simulation.batches && simulation.batches.length > 0) ||
-              (simulation.completedBatches &&
-                simulation.completedBatches.length > 0)) && (
-              <ExpectedOrders
-                batches={simulation.batches || []}
-                completedBatches={simulation.completedBatches || []}
-              />
-            )}
-
-            {/* Actual Orders */}
-            <ActualOrders
-              processedOrdersByItem={simulation.processedOrdersByItem || []}
-            />
-          </div>
-
-          {/* Third Row: Inventory and Stockouts Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
-            {/* Inventory */}
-            {simulation.inventory &&
-              Object.keys(simulation.inventory).length > 0 && (
-                <div className="bg-white shadow rounded-lg p-6">
-                  <h3 className="text-lg font-medium text-gray-900 mb-4">
-                    Current Inventory
-                  </h3>
-                  <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
-                    {Object.entries(simulation.inventory).map(
-                      ([itemGuid, quantity]) => (
-                        <div key={itemGuid} className="border rounded-lg p-3">
-                          <p className="text-sm text-gray-500 truncate">
-                            {itemGuid}
-                          </p>
-                          <p className="text-xl font-bold text-gray-900">
-                            {formatNumber(quantity)}
-                          </p>
-                        </div>
-                      )
-                    )}
-                  </div>
-                </div>
-              )}
-
-            {/* Stockouts & Missed Orders */}
-            <Stockout
-              missedOrders={simulation.missedOrders || []}
-              events={simulation.recentEvents || []}
-            />
-          </div>
-
-          {/* Fourth Row: Batches Timeline (Full Width) */}
+          {/* Batches Timeline (Full Width) */}
           {((simulation.batches && simulation.batches.length > 0) ||
             (simulation.completedBatches &&
               simulation.completedBatches.length > 0)) && (
@@ -753,59 +717,109 @@ export default function SimulationPage() {
             </div>
           )}
 
+          {/* Second Row: Planned and Actual Orders Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Planned Items from Scheduled Batches */}
+            {((simulation.batches && simulation.batches.length > 0) ||
+              (simulation.completedBatches &&
+                simulation.completedBatches.length > 0)) && (
+              <ExpectedOrders
+                batches={simulation.batches || []}
+                completedBatches={simulation.completedBatches || []}
+              />
+            )}
+
+            {/* Actual Orders */}
+            <ActualOrders
+              processedOrdersByItem={simulation.processedOrdersByItem || []}
+            />
+          </div>
+
+          {/* Third Row: Visual Inventory and Stockouts Side by Side */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Visual Inventory */}
+            {simulation.inventory &&
+              (Object.keys(simulation.inventory).length > 0 ||
+                (simulation.completedBatches &&
+                  simulation.completedBatches.length > 0)) && (
+                <VisualInventory
+                  inventory={
+                    simulation.inventory instanceof Map
+                      ? simulation.inventory
+                      : new Map(Object.entries(simulation.inventory || {}))
+                  }
+                  inventoryUnits={simulation.inventoryUnits}
+                  completedBatches={simulation.completedBatches || []}
+                  currentTime={simulation.currentTime || "06:00"}
+                  bakeSpecs={bakeSpecs}
+                />
+              )}
+
+            {/* Stockouts & Missed Orders */}
+            <Stockout
+              missedOrders={simulation.missedOrders || []}
+              events={simulation.recentEvents || []}
+            />
+          </div>
+
           {/* Fifth Row: POS/Order Status and Recent Events Side by Side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
             {/* POS - Point of Sale (Manual Mode Only) */}
             {simulation.mode === "manual" && (
-              <div className="bg-white shadow rounded-lg p-6">
+              <div
+                className="bg-white shadow rounded-lg p-6 flex flex-col"
+                style={{ minHeight: "500px", maxHeight: "500px" }}
+              >
                 <h3 className="text-lg font-medium text-gray-900 mb-4">
                   Point of Sale
                 </h3>
                 {availableItems.length === 0 ? (
-                  <div className="text-center py-8 text-gray-500">
+                  <div className="text-center py-8 text-gray-500 flex-1 flex items-center justify-center">
                     No items available for purchase yet. Wait for batches to
                     become available.
                   </div>
                 ) : (
-                  <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                    {availableItems.map((item) => (
-                      <div
-                        key={item.itemGuid}
-                        className="border rounded-lg p-4 hover:shadow-md transition-shadow"
-                      >
-                        <div className="flex justify-between items-start mb-3">
-                          <h4 className="font-medium text-gray-900">
-                            {item.displayName || item.itemGuid}
-                          </h4>
-                          <span className="text-sm font-bold text-blue-600">
-                            {formatNumber(item.quantity)} available
-                          </span>
+                  <div className="flex-1 overflow-y-auto">
+                    <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                      {availableItems.map((item) => (
+                        <div
+                          key={item.itemGuid}
+                          className="border rounded-lg p-4 hover:shadow-md transition-shadow"
+                        >
+                          <div className="flex justify-between items-start mb-3">
+                            <h4 className="font-medium text-gray-900">
+                              {item.displayName || item.itemGuid}
+                            </h4>
+                            <span className="text-sm font-bold text-blue-600">
+                              {formatNumber(item.quantity)} available
+                            </span>
+                          </div>
+                          <div className="flex gap-2">
+                            <button
+                              onClick={() => handlePurchase(item.itemGuid, 1)}
+                              disabled={purchasing || item.quantity < 1}
+                              className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                            >
+                              Buy 1
+                            </button>
+                            <button
+                              onClick={() => handlePurchase(item.itemGuid, 3)}
+                              disabled={purchasing || item.quantity < 3}
+                              className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                            >
+                              Buy 3
+                            </button>
+                            <button
+                              onClick={() => handlePurchase(item.itemGuid, 6)}
+                              disabled={purchasing || item.quantity < 6}
+                              className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
+                            >
+                              Buy 6
+                            </button>
+                          </div>
                         </div>
-                        <div className="flex gap-2">
-                          <button
-                            onClick={() => handlePurchase(item.itemGuid, 1)}
-                            disabled={purchasing || item.quantity < 1}
-                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                          >
-                            Buy 1
-                          </button>
-                          <button
-                            onClick={() => handlePurchase(item.itemGuid, 3)}
-                            disabled={purchasing || item.quantity < 3}
-                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                          >
-                            Buy 3
-                          </button>
-                          <button
-                            onClick={() => handlePurchase(item.itemGuid, 6)}
-                            disabled={purchasing || item.quantity < 6}
-                            className="flex-1 px-3 py-2 bg-green-600 text-white rounded-md hover:bg-green-700 disabled:bg-gray-300 disabled:cursor-not-allowed text-sm"
-                          >
-                            Buy 6
-                          </button>
-                        </div>
-                      </div>
-                    ))}
+                      ))}
+                    </div>
                   </div>
                 )}
               </div>
@@ -813,7 +827,10 @@ export default function SimulationPage() {
 
             {/* Order Processing Status (Preset Mode Only) */}
             {simulation.mode === "preset" && (
-              <div className="bg-white shadow rounded-lg p-6">
+              <div
+                className="bg-white shadow rounded-lg p-6 flex flex-col"
+                style={{ minHeight: "500px", maxHeight: "500px" }}
+              >
                 <h3 className="text-lg font-medium text-gray-900 mb-4">
                   Order Processing Status
                 </h3>
@@ -856,11 +873,14 @@ export default function SimulationPage() {
 
             {/* Recent Events */}
             {simulation.recentEvents && simulation.recentEvents.length > 0 && (
-              <div className="bg-white shadow rounded-lg p-6">
+              <div
+                className="bg-white shadow rounded-lg p-6 flex flex-col"
+                style={{ minHeight: "500px", maxHeight: "500px" }}
+              >
                 <h3 className="text-lg font-medium text-gray-900 mb-4">
                   Recent Events
                 </h3>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
+                <div className="flex-1 overflow-y-auto space-y-2">
                   {simulation.recentEvents
                     .slice()
                     .reverse()
@@ -886,11 +906,14 @@ export default function SimulationPage() {
           {((simulation.batches && simulation.batches.length > 0) ||
             (simulation.completedBatches &&
               simulation.completedBatches.length > 0)) && (
-            <div className="bg-white shadow rounded-lg p-6">
+            <div
+              className="bg-white shadow rounded-lg p-6 flex flex-col"
+              style={{ minHeight: "500px", maxHeight: "500px" }}
+            >
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 All Batches (Table View)
               </h3>
-              <div className="overflow-x-auto">
+              <div className="flex-1 overflow-auto">
                 <table className="min-w-full divide-y divide-gray-200">
                   <thead className="bg-gray-50">
                     <tr>

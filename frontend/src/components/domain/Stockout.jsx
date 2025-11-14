@@ -80,11 +80,14 @@ export default function Stockout({ missedOrders = [], events = [] }) {
 
   if (stockoutSummary.totalMissedOrders === 0) {
     return (
-      <div className="bg-white shadow rounded-lg p-6">
+      <div
+        className="bg-white shadow rounded-lg p-6 flex flex-col"
+        style={{ minHeight: "500px", maxHeight: "500px" }}
+      >
         <h3 className="text-lg font-medium text-gray-900 mb-4">
           Stockouts & Missed Orders
         </h3>
-        <div className="text-center py-8">
+        <div className="text-center py-8 flex-1 flex flex-col items-center justify-center">
           <div className="inline-flex items-center justify-center w-16 h-16 rounded-full bg-green-100 mb-4">
             <svg
               className="w-8 h-8 text-green-600"
@@ -108,7 +111,10 @@ export default function Stockout({ missedOrders = [], events = [] }) {
   }
 
   return (
-    <div className="bg-white shadow rounded-lg p-6">
+    <div
+      className="bg-white shadow rounded-lg p-6 flex flex-col"
+      style={{ minHeight: "500px", maxHeight: "500px" }}
+    >
       <h3 className="text-lg font-medium text-gray-900 mb-4">
         Stockouts & Missed Orders
       </h3>
@@ -134,7 +140,7 @@ export default function Stockout({ missedOrders = [], events = [] }) {
       </div>
 
       {/* Items Breakdown */}
-      <div>
+      <div className="flex-1 overflow-y-auto">
         <h4 className="text-md font-semibold text-gray-900 mb-3">
           Missed Orders by Item
         </h4>

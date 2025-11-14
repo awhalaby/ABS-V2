@@ -35,7 +35,9 @@ export function purchaseItems(simulationId, items, io = null) {
       return;
     }
 
-    const currentInventory = simulation.inventory.get(itemGuid) || 0;
+    // Check inventory using FIFO units
+    const inventoryUnits = simulation.inventoryUnits.get(itemGuid) || [];
+    const currentInventory = inventoryUnits.length;
 
     if (currentInventory < quantity) {
       errors.push({
@@ -47,8 +49,12 @@ export function purchaseItems(simulationId, items, io = null) {
       return;
     }
 
-    // Decrease inventory
-    const newInventory = currentInventory - quantity;
+    // Decrease inventory - remove oldest units first (FIFO)
+    // Units are already sorted by availableAt (oldest first)
+    inventoryUnits.splice(0, quantity);
+
+    // Update inventory count (for compatibility)
+    const newInventory = inventoryUnits.length;
     simulation.inventory.set(itemGuid, newInventory);
 
     // Update total inventory stat

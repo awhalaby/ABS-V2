@@ -93,11 +93,14 @@ export default function ActualOrders({ processedOrdersByItem = [] }) {
     (!timeIntervalSummary || timeIntervalSummary.length === 0)
   ) {
     return (
-      <div className="bg-white shadow rounded-lg p-6">
+      <div
+        className="bg-white shadow rounded-lg p-6 flex flex-col"
+        style={{ minHeight: "500px", maxHeight: "500px" }}
+      >
         <h3 className="text-lg font-medium text-gray-900 mb-4">
           Actual Orders
         </h3>
-        <div className="text-center py-8 text-gray-500">
+        <div className="text-center py-8 text-gray-500 flex-1 flex items-center justify-center">
           No items processed yet. Items will appear here as they are fulfilled.
         </div>
       </div>
@@ -105,7 +108,10 @@ export default function ActualOrders({ processedOrdersByItem = [] }) {
   }
 
   return (
-    <div className="bg-white shadow rounded-lg p-6">
+    <div
+      className="bg-white shadow rounded-lg p-6 flex flex-col"
+      style={{ minHeight: "500px", maxHeight: "500px" }}
+    >
       <h3 className="text-lg font-medium text-gray-900 mb-4">Actual Orders</h3>
 
       {/* Summary Cards */}
@@ -121,71 +127,73 @@ export default function ActualOrders({ processedOrdersByItem = [] }) {
       </div>
 
       {/* Items Breakdown */}
-      {ordersSummary.items.length > 0 && (
-        <div className="mb-6">
-          <h4 className="text-md font-semibold text-gray-900 mb-3">
-            Actual by Item
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {ordersSummary.items.map((item) => (
-              <div
-                key={item.itemGuid || item.displayName}
-                className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
-              >
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {item.displayName || item.itemGuid}
-                </p>
-                <p className="text-xl font-bold text-gray-700 mt-1">
-                  {formatNumber(item.totalQuantity || 0)}
-                </p>
-              </div>
-            ))}
-          </div>
-        </div>
-      )}
-
-      {/* Time Interval Chart */}
-      {timeIntervalSummary && timeIntervalSummary.length > 0 && (
-        <div>
-          <h4 className="text-md font-semibold text-gray-900 mb-3">
-            Actual Orders Over Time
-          </h4>
-          <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
-            <div className="space-y-2 max-h-64 overflow-y-auto">
-              {timeIntervalSummary.map((interval, idx) => {
-                const maxQuantity = Math.max(
-                  ...timeIntervalSummary.map((i) => i.quantity),
-                  1
-                );
-                const percentage = (interval.quantity / maxQuantity) * 100;
-
-                return (
-                  <div key={idx} className="flex items-center gap-3">
-                    <div className="w-20 text-xs font-mono text-gray-600 flex-shrink-0">
-                      {interval.time}
-                    </div>
-                    <div className="flex-1 bg-gray-200 rounded-full h-6 relative overflow-hidden">
-                      <div
-                        className="bg-blue-500 h-full rounded-full transition-all flex items-center justify-end pr-2"
-                        style={{ width: `${percentage}%` }}
-                      >
-                        {interval.quantity > 0 && (
-                          <span className="text-xs font-semibold text-white">
-                            {formatNumber(interval.quantity)}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="w-16 text-right text-sm font-semibold text-gray-700 flex-shrink-0">
-                      {formatNumber(interval.quantity)}
-                    </div>
-                  </div>
-                );
-              })}
+      <div className="flex-1 overflow-y-auto">
+        {ordersSummary.items.length > 0 && (
+          <div className="mb-6">
+            <h4 className="text-md font-semibold text-gray-900 mb-3">
+              Actual by Item
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {ordersSummary.items.map((item) => (
+                <div
+                  key={item.itemGuid || item.displayName}
+                  className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                >
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {item.displayName || item.itemGuid}
+                  </p>
+                  <p className="text-xl font-bold text-gray-700 mt-1">
+                    {formatNumber(item.totalQuantity || 0)}
+                  </p>
+                </div>
+              ))}
             </div>
           </div>
-        </div>
-      )}
+        )}
+
+        {/* Time Interval Chart */}
+        {timeIntervalSummary && timeIntervalSummary.length > 0 && (
+          <div>
+            <h4 className="text-md font-semibold text-gray-900 mb-3">
+              Actual Orders Over Time
+            </h4>
+            <div className="border border-gray-200 rounded-lg p-4 bg-gray-50">
+              <div className="space-y-2 overflow-y-auto">
+                {timeIntervalSummary.map((interval, idx) => {
+                  const maxQuantity = Math.max(
+                    ...timeIntervalSummary.map((i) => i.quantity),
+                    1
+                  );
+                  const percentage = (interval.quantity / maxQuantity) * 100;
+
+                  return (
+                    <div key={idx} className="flex items-center gap-3">
+                      <div className="w-20 text-xs font-mono text-gray-600 flex-shrink-0">
+                        {interval.time}
+                      </div>
+                      <div className="flex-1 bg-gray-200 rounded-full h-6 relative overflow-hidden">
+                        <div
+                          className="bg-blue-500 h-full rounded-full transition-all flex items-center justify-end pr-2"
+                          style={{ width: `${percentage}%` }}
+                        >
+                          {interval.quantity > 0 && (
+                            <span className="text-xs font-semibold text-white">
+                              {formatNumber(interval.quantity)}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                      <div className="w-16 text-right text-sm font-semibold text-gray-700 flex-shrink-0">
+                        {formatNumber(interval.quantity)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          </div>
+        )}
+      </div>
     </div>
   );
 }

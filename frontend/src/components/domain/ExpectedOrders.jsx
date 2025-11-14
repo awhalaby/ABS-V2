@@ -131,15 +131,23 @@ export default function ExpectedOrders({
 
   if (summary.totalQuantity === 0) {
     return (
-      <div className="bg-white shadow rounded-lg p-6">
+      <div
+        className="bg-white shadow rounded-lg p-6 flex flex-col"
+        style={{ minHeight: "500px", maxHeight: "500px" }}
+      >
         <h3 className="text-lg font-medium text-gray-900 mb-4">{title}</h3>
-        <div className="text-center py-8 text-gray-500">{emptyMessage}</div>
+        <div className="text-center py-8 text-gray-500 flex-1 flex items-center justify-center">
+          {emptyMessage}
+        </div>
       </div>
     );
   }
 
   return (
-    <div className="bg-white shadow rounded-lg p-6">
+    <div
+      className="bg-white shadow rounded-lg p-6 flex flex-col"
+      style={{ minHeight: "500px", maxHeight: "500px" }}
+    >
       <h3 className="text-lg font-medium text-gray-900 mb-4">{title}</h3>
 
       {/* Summary Cards */}
@@ -155,28 +163,30 @@ export default function ExpectedOrders({
       </div>
 
       {/* Items Breakdown */}
-      {summary.items.length > 0 && (
-        <div className="mb-6">
-          <h4 className="text-md font-semibold text-gray-900 mb-3">
-            {itemsLabel}
-          </h4>
-          <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
-            {summary.items.map((item) => (
-              <div
-                key={item.itemGuid || item.displayName}
-                className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
-              >
-                <p className="text-sm font-medium text-gray-900 truncate">
-                  {item.displayName || item.itemGuid}
-                </p>
-                <p className="text-xl font-bold text-gray-700 mt-1">
-                  {formatNumber(item.quantity)}
-                </p>
-              </div>
-            ))}
+      <div className="flex-1 overflow-y-auto">
+        {summary.items.length > 0 && (
+          <div className="mb-6">
+            <h4 className="text-md font-semibold text-gray-900 mb-3">
+              {itemsLabel}
+            </h4>
+            <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-3">
+              {summary.items.map((item) => (
+                <div
+                  key={item.itemGuid || item.displayName}
+                  className="border border-gray-200 rounded-lg p-3 hover:bg-gray-50 transition-colors"
+                >
+                  <p className="text-sm font-medium text-gray-900 truncate">
+                    {item.displayName || item.itemGuid}
+                  </p>
+                  <p className="text-xl font-bold text-gray-700 mt-1">
+                    {formatNumber(item.quantity)}
+                  </p>
+                </div>
+              ))}
+            </div>
           </div>
-        </div>
-      )}
+        )}
+      </div>
     </div>
   );
 }

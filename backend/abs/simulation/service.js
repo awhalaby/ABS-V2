@@ -37,8 +37,12 @@ export class SimulationState {
     this.pausedAt = null;
     this.pausedDuration = 0;
 
-    // Inventory tracking: itemGuid -> quantity available
-    this.inventory = new Map();
+    // Inventory tracking: itemGuid -> array of units with availableAt timestamps (FIFO)
+    // Each unit is: { availableAt: minutes, batchId: string }
+    this.inventoryUnits = new Map(); // itemGuid -> Array<{availableAt, batchId}>
+
+    // Legacy inventory count for compatibility (derived from inventoryUnits)
+    this.inventory = new Map(); // itemGuid -> quantity (computed from inventoryUnits)
 
     // Batch tracking
     this.batches = [];
@@ -411,9 +415,25 @@ export function updateSimulation(simulationId) {
       batch.status = "available";
       batch.availableAt = simulation.currentTime;
 
-      // Update inventory
-      const currentInventory = simulation.inventory.get(batch.itemGuid) || 0;
-      const newInventory = currentInventory + batch.quantity;
+      // Add individual units to inventory (FIFO tracking)
+      if (!simulation.inventoryUnits.has(batch.itemGuid)) {
+        simulation.inventoryUnits.set(batch.itemGuid, []);
+      }
+      const units = simulation.inventoryUnits.get(batch.itemGuid);
+
+      // Add all units from this batch with their availableAt timestamp
+      for (let i = 0; i < batch.quantity; i++) {
+        units.push({
+          availableAt: simulation.currentTime,
+          batchId: batch.batchId,
+        });
+      }
+
+      // Sort units by availableAt (oldest first) for FIFO
+      units.sort((a, b) => a.availableAt - b.availableAt);
+
+      // Update inventory count (for compatibility)
+      const newInventory = units.length;
       simulation.inventory.set(batch.itemGuid, newInventory);
 
       simulation.stats.batchesAvailable++;
@@ -462,15 +482,20 @@ export function updateSimulation(simulationId) {
         simulation.currentTime >= order.orderTimeMinutes &&
         previousTime < order.orderTimeMinutes
       ) {
-        // Check if item is available in inventory
-        const availableInventory =
-          simulation.inventory.get(order.itemGuid) || 0;
+        // Check if item is available in inventory (FIFO - consume oldest first)
+        const inventoryUnits =
+          simulation.inventoryUnits.get(order.itemGuid) || [];
         const requestedQuantity = order.quantity;
 
-        if (availableInventory >= requestedQuantity) {
-          // Process order - decrease inventory
-          const newInventory = availableInventory - requestedQuantity;
+        if (inventoryUnits.length >= requestedQuantity) {
+          // Process order - remove oldest units first (FIFO)
+          // Units are already sorted by availableAt (oldest first)
+          inventoryUnits.splice(0, requestedQuantity);
+
+          // Update inventory count (for compatibility)
+          const newInventory = inventoryUnits.length;
           simulation.inventory.set(order.itemGuid, newInventory);
+
           simulation.stats.itemsProcessed += requestedQuantity; // Sum quantities, not count records
           simulation.stats.totalInventory = Array.from(
             simulation.inventory.values()
@@ -518,6 +543,7 @@ export function updateSimulation(simulationId) {
           simulation.stats.itemsMissed += requestedQuantity; // Sum quantities, not count records
 
           // Track missed order by item
+          const availableInventory = inventoryUnits.length;
           if (!simulation.missedOrders.has(order.itemGuid)) {
             simulation.missedOrders.set(order.itemGuid, {
               itemGuid: order.itemGuid,
@@ -920,6 +946,12 @@ export function updateAllSimulations(io) {
           currentTime: formatMinutesToTime(updated.currentTime),
           stats: updated.stats,
           inventory: Object.fromEntries(updated.inventory),
+          inventoryUnits: Object.fromEntries(
+            Array.from(updated.inventoryUnits.entries()).map(([key, units]) => [
+              key,
+              units,
+            ])
+          ), // Send actual remaining units for FIFO display
           batches: updated.batches.map((b) => ({
             batchId: b.batchId,
             displayName: b.displayName,
@@ -943,6 +975,7 @@ export function updateAllSimulations(io) {
             startTime: b.startTime,
             endTime: b.endTime,
             availableTime: b.availableTime,
+            availableAt: b.availableAt, // Include availableAt (minutes) for freshness tracking
           })),
           forecast: updated.forecast || [],
           timeIntervalForecast: updated.timeIntervalForecast || [],
