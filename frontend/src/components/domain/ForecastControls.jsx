@@ -95,7 +95,7 @@ export default function ForecastControls({
             max="12"
             value={lookbackWeeks}
             onChange={(e) => setLookbackWeeks(parseInt(e.target.value, 10))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="touch-input w-full border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
           <p className="mt-1 text-xs text-gray-500">
             Number of weeks of historical data to analyze
@@ -109,7 +109,7 @@ export default function ForecastControls({
               type="checkbox"
               checked={useCustomStartDate}
               onChange={(e) => setUseCustomStartDate(e.target.checked)}
-              className="rounded border-gray-300 text-blue-600 focus:ring-blue-500"
+              className="w-5 h-5 rounded border-gray-300 text-blue-600 focus:ring-2 focus:ring-blue-500"
             />
             <span className="text-sm font-medium text-gray-700">
               Use Custom Start Date
@@ -121,7 +121,7 @@ export default function ForecastControls({
                 type="date"
                 value={customStartDate}
                 onChange={(e) => setCustomStartDate(e.target.value)}
-                className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                className="touch-input w-full border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
               />
               <p className="mt-1 text-xs text-gray-500">
                 Forecast will start from this date
@@ -147,7 +147,7 @@ export default function ForecastControls({
             max="365"
             value={forecastDays}
             onChange={(e) => setForecastDays(parseInt(e.target.value, 10))}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="touch-input w-full border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           />
           <p className="mt-1 text-xs text-gray-500">
             Number of days to forecast
@@ -167,7 +167,7 @@ export default function ForecastControls({
           <select
             value={increment}
             onChange={(e) => setIncrement(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            className="touch-input w-full border border-gray-300 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-blue-500"
           >
             <option value="day">Day</option>
             <option value="week">Week</option>
@@ -187,7 +187,7 @@ export default function ForecastControls({
             step="0.05"
             value={growthRate}
             onChange={(e) => setGrowthRate(parseFloat(e.target.value))}
-            className="w-full"
+            className="w-full touch-slider h-12"
           />
           <div className="flex justify-between text-xs text-gray-500 mt-1">
             <span>{FORECAST_DEFAULTS.MIN_GROWTH_RATE}x</span>
@@ -197,22 +197,22 @@ export default function ForecastControls({
       </div>
 
       {/* Preset Buttons */}
-      <div className="mt-6 flex gap-2 flex-wrap">
+      <div className="mt-6 flex gap-3 flex-wrap">
         <button
           onClick={() => handlePreset("nextWeek")}
-          className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+          className="touch-button px-6 py-3 text-base bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 shadow-sm active:shadow-none"
         >
           Next Week
         </button>
         <button
           onClick={() => handlePreset("nextMonth")}
-          className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+          className="touch-button px-6 py-3 text-base bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 shadow-sm active:shadow-none"
         >
           Next Month
         </button>
         <button
           onClick={() => handlePreset("nextQuarter")}
-          className="px-4 py-2 text-sm bg-gray-100 text-gray-700 rounded-md hover:bg-gray-200"
+          className="touch-button px-6 py-3 text-base bg-gray-100 text-gray-700 rounded-lg hover:bg-gray-200 shadow-sm active:shadow-none"
         >
           Next Quarter
         </button>
@@ -223,7 +223,7 @@ export default function ForecastControls({
         <button
           onClick={handleGenerate}
           disabled={loading}
-          className="w-full bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          className="touch-button w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:cursor-not-allowed shadow-md active:shadow-sm"
         >
           {loading ? "Generating Forecast..." : "Generate Forecast"}
         </button>

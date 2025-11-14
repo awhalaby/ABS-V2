@@ -9,9 +9,151 @@ body {
     sans-serif;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
+  /* Improve touch scrolling on tablets */
+  -webkit-overflow-scrolling: touch;
+  touch-action: pan-y;
 }
 
 code {
   font-family: source-code-pro, Menlo, Monaco, Consolas, "Courier New",
     monospace;
+}
+
+/* Touch-friendly base styles */
+@layer base {
+  /* Ensure minimum touch target size (44x44px for iOS, 48x48px for Material) */
+  button,
+  a,
+  input[type="button"],
+  input[type="submit"],
+  input[type="range"],
+  select {
+    min-height: 44px;
+    min-width: 44px;
+  }
+
+  /* Improve touch feedback */
+  button:active,
+  a:active {
+    opacity: 0.7;
+    transform: scale(0.98);
+  }
+
+  /* Prevent text selection on touch interactions */
+  button,
+  .touch-target {
+    -webkit-tap-highlight-color: transparent;
+    -webkit-touch-callout: none;
+    user-select: none;
+  }
+}
+
+/* Touch-optimized components */
+@layer components {
+  .touch-button {
+    @apply min-h-[48px] px-6 py-3 text-base font-medium;
+    @apply active:scale-95 transition-transform;
+  }
+
+  .touch-input {
+    @apply min-h-[48px] px-4 py-3 text-base;
+  }
+
+  .touch-slider {
+    @apply min-h-[48px] cursor-pointer;
+    /* Increase slider thumb size for touch */
+    -webkit-appearance: none;
+    appearance: none;
+    background: transparent;
+    width: 100%;
+  }
+
+  /* Webkit slider track (the line) */
+  .touch-slider::-webkit-slider-runnable-track {
+    width: 100%;
+    height: 4px;
+    background: #d1d5db;
+    border-radius: 2px;
+    border: none;
+  }
+
+  /* Vertical sliders use transparent track (background div shows) */
+  .touch-slider.vertical-slider-rotated::-webkit-slider-runnable-track {
+    background: transparent;
+  }
+
+  /* Webkit slider thumb */
+  .touch-slider::-webkit-slider-thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #2563eb;
+    cursor: pointer;
+    -webkit-appearance: none;
+    appearance: none;
+    margin-top: -10px; /* Center thumb on track */
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+    border: 2px solid white;
+  }
+
+  /* Webkit slider thumb hover/active */
+  .touch-slider::-webkit-slider-thumb:hover {
+    background: #1d4ed8;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Mozilla slider track (the line) */
+  .touch-slider::-moz-range-track {
+    width: 100%;
+    height: 4px;
+    background: #d1d5db;
+    border-radius: 2px;
+    border: none;
+  }
+
+  /* Vertical sliders use transparent track (background div shows) */
+  .touch-slider.vertical-slider-rotated::-moz-range-track {
+    background: transparent;
+  }
+
+  /* Mozilla slider thumb */
+  .touch-slider::-moz-range-thumb {
+    width: 24px;
+    height: 24px;
+    border-radius: 50%;
+    background: #2563eb;
+    cursor: pointer;
+    border: 2px solid white;
+    box-shadow: 0 2px 4px rgba(0, 0, 0, 0.2);
+  }
+
+  /* Mozilla slider thumb hover */
+  .touch-slider::-moz-range-thumb:hover {
+    background: #1d4ed8;
+    box-shadow: 0 3px 6px rgba(0, 0, 0, 0.3);
+  }
+
+  /* Vertical slider specific styles */
+  .touch-slider.vertical-slider {
+    writing-mode: vertical-lr;
+    -webkit-appearance: slider-vertical;
+  }
+
+  .touch-slider.vertical-slider::-webkit-slider-runnable-track {
+    width: 4px;
+    height: 100%;
+  }
+
+  .touch-slider.vertical-slider::-webkit-slider-thumb {
+    margin-top: 0;
+    margin-left: -10px;
+  }
+
+  .touch-table-row {
+    @apply min-h-[56px] py-4;
+  }
+
+  .touch-card {
+    @apply p-4 min-h-[80px];
+  }
 }

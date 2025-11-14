@@ -5,6 +5,7 @@ import ForecastPage from "./pages/ForecastPage.jsx";
 import SchedulePage from "./pages/SchedulePage.jsx";
 import BakeSpecsPage from "./pages/BakeSpecsPage.jsx";
 import SimulationPage from "./pages/SimulationPage.jsx";
+import BackendConfig from "./components/common/BackendConfig.jsx";
 
 function App() {
   return (
@@ -79,6 +80,9 @@ function App() {
             <Route path="/simulation" element={<SimulationPage />} />
           </Routes>
         </main>
+
+        {/* Backend Configuration Component - allows runtime URL configuration */}
+        <BackendConfig />
       </div>
     </Router>
   );

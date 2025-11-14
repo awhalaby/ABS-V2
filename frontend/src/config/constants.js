@@ -3,11 +3,49 @@
  */
 
 // API Configuration
-// Use environment variables for production, fallback to local network for development
-export const API_BASE_URL =
-  import.meta.env.VITE_API_URL || "http://10.1.10.112:3001";
-export const WEBSOCKET_URL =
-  import.meta.env.VITE_WEBSOCKET_URL || "http://10.1.10.112:3001";
+// Try multiple methods to determine the backend URL:
+// 1. Environment variable (set at build time)
+// 2. localStorage (user-configured)
+// 3. Auto-detect from current hostname
+// 4. Fallback to hardcoded IP
+
+function getBackendURL() {
+  // Check localStorage first (allows runtime configuration)
+  const storedURL = localStorage.getItem("backend_url");
+  if (storedURL) {
+    return storedURL;
+  }
+
+  // Check environment variable
+  if (import.meta.env.VITE_API_URL) {
+    return import.meta.env.VITE_API_URL;
+  }
+
+  // Auto-detect: if accessing from a different host, use that hostname
+  const currentHost = window.location.hostname;
+  if (currentHost !== "localhost" && currentHost !== "127.0.0.1") {
+    // Use the same hostname but port 3001 for backend
+    return `http://${currentHost}:3001`;
+  }
+
+  // Fallback to hardcoded IP (for development)
+  return "http://10.1.10.112:3001";
+}
+
+export const API_BASE_URL = getBackendURL();
+export const WEBSOCKET_URL = getBackendURL();
+
+// Export function to update backend URL at runtime
+export function setBackendURL(url) {
+  localStorage.setItem("backend_url", url);
+  // Reload page to apply new URL
+  window.location.reload();
+}
+
+// Export function to get current backend URL
+export function getCurrentBackendURL() {
+  return API_BASE_URL;
+}
 
 // Business Configuration
 export const BUSINESS_TIMEZONE = "America/New_York";

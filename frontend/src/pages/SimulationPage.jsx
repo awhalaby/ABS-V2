@@ -361,7 +361,7 @@ export default function SimulationPage() {
 
             {/* Date Selection */}
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-base font-medium text-gray-700 mb-3">
                 Schedule Date
               </label>
               {mode === "preset" ? (
@@ -369,7 +369,7 @@ export default function SimulationPage() {
                   value={scheduleDate}
                   onChange={(e) => setScheduleDate(e.target.value)}
                   disabled={loadingDates || availableDates.length === 0}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
+                  className="touch-input w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 disabled:bg-gray-100"
                 >
                   {loadingDates ? (
                     <option>Loading dates...</option>
@@ -389,12 +389,12 @@ export default function SimulationPage() {
                   type="date"
                   value={scheduleDate}
                   onChange={(e) => setScheduleDate(e.target.value)}
-                  className="w-full px-3 py-2 border border-gray-300 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500"
+                  className="touch-input w-full border border-gray-300 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
                 />
               )}
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-2">
+              <label className="block text-base font-medium text-gray-700 mb-3">
                 Speed Multiplier ({speedMultiplier}x)
               </label>
               <input
@@ -406,7 +406,7 @@ export default function SimulationPage() {
                 onChange={(e) =>
                   setSpeedMultiplier(parseInt(e.target.value, 10))
                 }
-                className="w-full"
+                className="w-full touch-slider h-12"
               />
               <div className="flex justify-between text-xs text-gray-500 mt-1">
                 <span>1x</span>
@@ -415,35 +415,43 @@ export default function SimulationPage() {
               </div>
             </div>
             <div>
-              <label className="block text-sm font-medium text-gray-700 mb-3">
+              <label className="block text-base font-medium text-gray-700 mb-4">
                 Forecast Scale by Period
               </label>
-              <div className="grid grid-cols-3 gap-4">
+              <div className="grid grid-cols-3 gap-6">
                 {/* Morning Slider */}
                 <div className="flex flex-col items-center">
-                  <label className="text-xs font-medium text-gray-600 mb-2">
+                  <label className="text-sm font-semibold text-gray-700 mb-2">
                     Morning
                   </label>
-                  <label className="text-xs text-gray-500 mb-1">
+                  <label className="text-xs text-gray-500 mb-3">
                     06:00-11:00
                   </label>
-                  <div className="relative flex flex-col items-center h-48">
-                    <input
-                      type="range"
-                      min="50"
-                      max="200"
-                      step="5"
-                      value={forecastScales.morning}
-                      onChange={(e) =>
-                        setForecastScales({
-                          ...forecastScales,
-                          morning: parseInt(e.target.value, 10),
-                        })
-                      }
-                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
-                      style={{ writingMode: "vertical-lr" }}
-                    />
-                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                  <div className="relative flex flex-col items-center h-64 w-full">
+                    {/* Track background line */}
+                    <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-1 h-full bg-gray-300 rounded-full"></div>
+                    {/* Slider container */}
+                    <div className="relative w-full h-full">
+                      <input
+                        type="range"
+                        min="50"
+                        max="200"
+                        step="5"
+                        value={forecastScales.morning}
+                        onChange={(e) =>
+                          setForecastScales({
+                            ...forecastScales,
+                            morning: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className="absolute top-0 left-1/2 transform -translate-x-1/2 w-64 h-full touch-slider vertical-slider-rotated"
+                        style={{
+                          transform: "translateX(-50%) rotate(-90deg)",
+                          transformOrigin: "center",
+                        }}
+                      />
+                    </div>
+                    <div className="absolute bottom-0 text-2xl font-bold text-gray-900 mt-2">
                       {forecastScales.morning}%
                     </div>
                   </div>
@@ -451,29 +459,37 @@ export default function SimulationPage() {
 
                 {/* Afternoon Slider */}
                 <div className="flex flex-col items-center">
-                  <label className="text-xs font-medium text-gray-600 mb-2">
+                  <label className="text-sm font-semibold text-gray-700 mb-2">
                     Afternoon
                   </label>
-                  <label className="text-xs text-gray-500 mb-1">
+                  <label className="text-xs text-gray-500 mb-3">
                     11:00-14:00
                   </label>
-                  <div className="relative flex flex-col items-center h-48">
-                    <input
-                      type="range"
-                      min="50"
-                      max="200"
-                      step="5"
-                      value={forecastScales.afternoon}
-                      onChange={(e) =>
-                        setForecastScales({
-                          ...forecastScales,
-                          afternoon: parseInt(e.target.value, 10),
-                        })
-                      }
-                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
-                      style={{ writingMode: "vertical-lr" }}
-                    />
-                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                  <div className="relative flex flex-col items-center h-64 w-full">
+                    {/* Track background line */}
+                    <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-1 h-full bg-gray-300 rounded-full"></div>
+                    {/* Slider container */}
+                    <div className="relative w-full h-full">
+                      <input
+                        type="range"
+                        min="50"
+                        max="200"
+                        step="5"
+                        value={forecastScales.afternoon}
+                        onChange={(e) =>
+                          setForecastScales({
+                            ...forecastScales,
+                            afternoon: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className="absolute top-0 left-1/2 transform -translate-x-1/2 w-64 h-full touch-slider vertical-slider-rotated"
+                        style={{
+                          transform: "translateX(-50%) rotate(-90deg)",
+                          transformOrigin: "center",
+                        }}
+                      />
+                    </div>
+                    <div className="absolute bottom-0 text-2xl font-bold text-gray-900 mt-2">
                       {forecastScales.afternoon}%
                     </div>
                   </div>
@@ -481,35 +497,43 @@ export default function SimulationPage() {
 
                 {/* Evening Slider */}
                 <div className="flex flex-col items-center">
-                  <label className="text-xs font-medium text-gray-600 mb-2">
+                  <label className="text-sm font-semibold text-gray-700 mb-2">
                     Evening
                   </label>
-                  <label className="text-xs text-gray-500 mb-1">
+                  <label className="text-xs text-gray-500 mb-3">
                     14:00-17:00
                   </label>
-                  <div className="relative flex flex-col items-center h-48">
-                    <input
-                      type="range"
-                      min="50"
-                      max="200"
-                      step="5"
-                      value={forecastScales.evening}
-                      onChange={(e) =>
-                        setForecastScales({
-                          ...forecastScales,
-                          evening: parseInt(e.target.value, 10),
-                        })
-                      }
-                      className="absolute top-0 w-48 h-full transform -rotate-90 origin-center"
-                      style={{ writingMode: "vertical-lr" }}
-                    />
-                    <div className="absolute bottom-0 text-lg font-bold text-gray-900">
+                  <div className="relative flex flex-col items-center h-64 w-full">
+                    {/* Track background line */}
+                    <div className="absolute top-0 left-1/2 transform -translate-x-1/2 w-1 h-full bg-gray-300 rounded-full"></div>
+                    {/* Slider container */}
+                    <div className="relative w-full h-full">
+                      <input
+                        type="range"
+                        min="50"
+                        max="200"
+                        step="5"
+                        value={forecastScales.evening}
+                        onChange={(e) =>
+                          setForecastScales({
+                            ...forecastScales,
+                            evening: parseInt(e.target.value, 10),
+                          })
+                        }
+                        className="absolute top-0 left-1/2 transform -translate-x-1/2 w-64 h-full touch-slider vertical-slider-rotated"
+                        style={{
+                          transform: "translateX(-50%) rotate(-90deg)",
+                          transformOrigin: "center",
+                        }}
+                      />
+                    </div>
+                    <div className="absolute bottom-0 text-2xl font-bold text-gray-900 mt-2">
                       {forecastScales.evening}%
                     </div>
                   </div>
                 </div>
               </div>
-              <p className="mt-3 text-sm text-gray-500 text-center">
+              <p className="mt-4 text-sm text-gray-500 text-center">
                 Adjust forecast demand by time period to test different
                 scenarios. This will regenerate the schedule with scaled
                 batches.
@@ -520,17 +544,17 @@ export default function SimulationPage() {
               disabled={
                 loading || (mode === "preset" && availableDates.length === 0)
               }
-              className="w-full px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 disabled:bg-gray-400"
+              className="touch-button w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:opacity-50 shadow-md active:shadow-sm"
             >
               {loading ? "Starting..." : "Start Simulation"}
             </button>
           </div>
         ) : (
-          <div className="flex gap-2 w-full">
+          <div className="flex gap-3 w-full">
             {simulation?.status === "running" && (
               <button
                 onClick={handlePause}
-                className="flex-1 px-4 py-2 bg-yellow-600 text-white rounded-md hover:bg-yellow-700"
+                className="touch-button flex-1 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 shadow-md active:shadow-sm"
               >
                 Pause
               </button>
@@ -538,20 +562,20 @@ export default function SimulationPage() {
             {simulation?.status === "paused" && (
               <button
                 onClick={handleResume}
-                className="flex-1 px-4 py-2 bg-green-600 text-white rounded-md hover:bg-green-700"
+                className="touch-button flex-1 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md active:shadow-sm"
               >
                 Resume
               </button>
             )}
             <button
               onClick={handleStop}
-              className="flex-1 px-4 py-2 bg-red-600 text-white rounded-md hover:bg-red-700"
+              className="touch-button flex-1 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-md active:shadow-sm"
             >
               Stop
             </button>
             <button
               onClick={handleReset}
-              className="flex-1 px-4 py-2 bg-gray-600 text-white rounded-md hover:bg-gray-700"
+              className="touch-button flex-1 bg-gray-600 text-white rounded-lg hover:bg-gray-700 shadow-md active:shadow-sm"
             >
               Reset
             </button>

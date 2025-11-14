@@ -63,11 +63,17 @@ api.interceptors.response.use(
         details: data?.error?.details,
       });
     } else if (error.request) {
-      // Request made but no response
+      // Request made but no response - likely connection issue
       console.error("No response received:", error.request);
+      const backendURL = api.defaults.baseURL;
       return Promise.reject({
         status: 0,
-        message: "No response from server. Please check your connection.",
+        message: `Cannot connect to backend server at ${backendURL}. Please check:
+1. The backend server is running
+2. You're on the same network as the server
+3. The backend URL is correct (currently: ${backendURL})
+4. Firewall settings allow connections`,
+        backendURL,
       });
     } else {
       // Error setting up request

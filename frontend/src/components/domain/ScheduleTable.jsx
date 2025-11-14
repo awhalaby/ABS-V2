@@ -105,7 +105,9 @@ export default function ScheduleTable({
                 {batchesByOven[oven].map((batch, idx) => (
                   <tr
                     key={batch.batchId}
-                    className={idx % 2 === 0 ? "bg-white" : "bg-gray-50"}
+                    className={`touch-table-row ${
+                      idx % 2 === 0 ? "bg-white" : "bg-gray-50"
+                    }`}
                   >
                     <td className="px-4 py-3 whitespace-nowrap text-sm font-medium text-gray-900">
                       Rack {batch.rackPosition}
@@ -134,7 +136,7 @@ export default function ScheduleTable({
                       {onBatchMove && (
                         <button
                           onClick={() => setSelectedBatch(batch)}
-                          className="text-blue-600 hover:text-blue-800"
+                          className="touch-button min-w-[80px] text-blue-600 hover:text-blue-800 hover:bg-blue-50 rounded-md px-3 py-2"
                         >
                           Move
                         </button>
@@ -219,8 +221,8 @@ function BatchMoveModal({ batch, onClose, onMove }) {
   };
 
   return (
-    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50">
-      <div className="relative top-20 mx-auto p-5 border w-96 shadow-lg rounded-md bg-white">
+    <div className="fixed inset-0 bg-gray-600 bg-opacity-50 overflow-y-auto h-full w-full z-50 flex items-center justify-center p-4">
+      <div className="relative mx-auto p-6 border w-full max-w-md shadow-lg rounded-lg bg-white">
         <h3 className="text-lg font-medium text-gray-900 mb-4">
           Move Batch: {batch.displayName || batch.itemGuid}
         </h3>
@@ -233,7 +235,7 @@ function BatchMoveModal({ batch, onClose, onMove }) {
               type="time"
               value={newStartTime}
               onChange={(e) => setNewStartTime(e.target.value)}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="touch-input w-full border border-gray-300 rounded-lg"
             />
           </div>
           <div>
@@ -246,20 +248,20 @@ function BatchMoveModal({ batch, onClose, onMove }) {
               max="12"
               value={newRack}
               onChange={(e) => setNewRack(parseInt(e.target.value, 10))}
-              className="w-full px-3 py-2 border border-gray-300 rounded-md"
+              className="touch-input w-full border border-gray-300 rounded-lg"
             />
           </div>
         </div>
-        <div className="mt-6 flex gap-2">
+        <div className="mt-6 flex gap-3">
           <button
             onClick={handleMove}
-            className="flex-1 bg-blue-600 text-white py-2 px-4 rounded-md hover:bg-blue-700"
+            className="touch-button flex-1 bg-blue-600 text-white rounded-lg hover:bg-blue-700 shadow-md active:shadow-sm"
           >
             Move
           </button>
           <button
             onClick={onClose}
-            className="flex-1 bg-gray-200 text-gray-700 py-2 px-4 rounded-md hover:bg-gray-300"
+            className="touch-button flex-1 bg-gray-200 text-gray-700 rounded-lg hover:bg-gray-300 shadow-md active:shadow-sm"
           >
             Cancel
           </button>

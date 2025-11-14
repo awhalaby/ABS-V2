@@ -60,7 +60,7 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
 
   return (
     <div
-      className={`bake-card absolute border-2 rounded-lg p-3 shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${className}`}
+      className={`bake-card touch-card absolute border-2 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${className}`}
       style={style}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
