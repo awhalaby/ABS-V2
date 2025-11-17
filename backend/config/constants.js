@@ -58,6 +58,7 @@ export const COLLECTIONS = {
   BAKE_SPECS: "bake_specs",
   FORECASTS: "forecasts",
   ABS_SCHEDULES: "abs_schedules",
+  STORE_INVENTORY: "store_inventory",
 };
 
 // Default SKUs (will be seeded)

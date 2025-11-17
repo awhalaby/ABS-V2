@@ -5,6 +5,7 @@ import ForecastPage from "./pages/ForecastPage.jsx";
 import SchedulePage from "./pages/SchedulePage.jsx";
 import BakeSpecsPage from "./pages/BakeSpecsPage.jsx";
 import SimulationPage from "./pages/SimulationPage.jsx";
+import InventoryPage from "./pages/InventoryPage.jsx";
 import BackendConfig from "./components/common/BackendConfig.jsx";
 
 function App() {
@@ -63,13 +64,19 @@ function App() {
                   >
                     Simulation
                   </Link>
+                  <Link
+                    to="/inventory"
+                    className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                  >
+                    Inventory
+                  </Link>
                 </div>
               </div>
             </div>
           </div>
         </nav>
 
-        <main className="max-w-7xl mx-auto py-6 sm:px-6 lg:px-8">
+        <main className="w-full py-6 sm:px-6 lg:px-8">
           <Routes>
             <Route path="/" element={<Dashboard />} />
             <Route path="/orders" element={<OrderLoaderPage />} />
@@ -78,6 +85,7 @@ function App() {
             <Route path="/abs" element={<SchedulePage />} />
             <Route path="/bakespecs" element={<BakeSpecsPage />} />
             <Route path="/simulation" element={<SimulationPage />} />
+            <Route path="/inventory" element={<InventoryPage />} />
           </Routes>
         </main>
 

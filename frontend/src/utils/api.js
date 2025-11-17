@@ -189,3 +189,19 @@ export const simulationAPI = {
       enabled,
     }),
 };
+
+// Inventory API
+export const inventoryAPI = {
+  getAll: (lookbackDays, leadTimeDays) =>
+    api.get("/api/inventory", {
+      params: { lookbackDays, leadTimeDays },
+    }),
+  getByItemGuid: (itemGuid) => api.get(`/api/inventory/${itemGuid}`),
+  update: (itemGuid, quantity, displayName, restockThreshold) =>
+    api.put(`/api/inventory/${itemGuid}`, {
+      quantity,
+      displayName,
+      restockThreshold,
+    }),
+  bulkUpdate: (updates) => api.post("/api/inventory/bulk", { updates }),
+};

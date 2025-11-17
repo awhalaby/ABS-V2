@@ -14,6 +14,7 @@ import velocityRouter from "./velocity/router.js";
 import forecastRouter from "./forecast/router.js";
 import absRouter from "./abs/router.js";
 import bakespecsRouter from "./bakespecs/router.js";
+import inventoryRouter from "./inventory/router.js";
 
 // Load environment variables
 dotenv.config();
@@ -91,6 +92,7 @@ app.use("/api/velocity", velocityRouter);
 app.use("/api/forecast", forecastRouter);
 app.use("/api/abs", absRouter);
 app.use("/api/bakespecs", bakespecsRouter);
+app.use("/api/inventory", inventoryRouter);
 
 // 404 handler
 app.use(notFoundHandler);

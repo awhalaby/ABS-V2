@@ -93,6 +93,11 @@ async function createIndexes() {
     await absSchedules.createIndex({ date: 1 });
     await absSchedules.createIndex({ createdAt: -1 });
 
+    // store_inventory indexes
+    const storeInventory = database.collection(COLLECTIONS.STORE_INVENTORY);
+    await storeInventory.createIndex({ itemGuid: 1 }, { unique: true });
+    await storeInventory.createIndex({ updatedAt: -1 });
+
     console.log("✅ Database indexes created");
   } catch (error) {
     console.error("⚠️ Error creating indexes:", error);
