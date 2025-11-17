@@ -740,6 +740,12 @@ export async function calculateSuggestedBatches(simulationId) {
     // Calculate current inventory
     const currentInventory = inventory.get(itemGuid) || 0;
 
+    // Get parMax from bake spec (Option G: cap shortfall at parMax to prevent waste)
+    const parMax =
+      bakeSpec.parMax !== null && bakeSpec.parMax !== undefined
+        ? bakeSpec.parMax
+        : null;
+
     // Calculate consumption rate (actual vs expected)
     // If we've consumed more than expected, adjust the remaining forecast
     const consumptionRatio =
@@ -773,8 +779,14 @@ export async function calculateSuggestedBatches(simulationId) {
       }
     });
 
-    // Calculate shortfall
-    const shortfall = Math.max(0, totalNeeded - futureInventory);
+    // Calculate shortfall (Option G: cap at parMax if set)
+    let shortfall = Math.max(0, totalNeeded - futureInventory);
+
+    // If parMax is set, cap shortfall to prevent exceeding parMax
+    if (parMax !== null && futureInventory < parMax) {
+      const maxAllowedShortfall = parMax - futureInventory;
+      shortfall = Math.min(shortfall, maxAllowedShortfall);
+    }
 
     // If we have a shortfall, suggest batches
     if (shortfall > 0) {
@@ -811,6 +823,16 @@ export async function calculateSuggestedBatches(simulationId) {
       };
       const roundedStartTime = roundToTwentyMinuteIncrement(targetStartTime);
 
+      // Calculate when batch would be available (start + bake + cool)
+      const batchAvailableTime = roundedStartTime + bakeTime + coolTime;
+
+      // Don't suggest batches that would be available within an hour of closing
+      const ONE_HOUR_BEFORE_CLOSING = BUSINESS_HOURS.END_MINUTES - 60;
+      if (batchAvailableTime > ONE_HOUR_BEFORE_CLOSING) {
+        // Batch would be available too close to closing, skip suggesting
+        return; // Skip to next item
+      }
+
       // Create suggested batches (all at the same time)
       for (let i = 0; i < batchesNeeded; i++) {
         const batchStartTime = roundedStartTime; // All batches start at the same time
@@ -840,6 +862,7 @@ export async function calculateSuggestedBatches(simulationId) {
               futureInventory,
               projectedRemainingDemand,
               shortfall,
+              parMax,
               consumptionRatio: Math.round(consumptionRatio * 100) / 100,
             },
           });
