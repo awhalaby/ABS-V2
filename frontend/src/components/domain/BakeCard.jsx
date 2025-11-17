@@ -21,6 +21,8 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
     availableTime,
     status,
     bakeTime,
+    isCatering,
+    cateringOrderId,
   } = batch;
 
   // Determine status color
@@ -45,6 +47,11 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
 
   const statusColor = getStatusColor();
 
+  // Add special styling for catering batches
+  const cateringStyle = isCatering
+    ? "border-dashed border-4 ring-2 ring-purple-300"
+    : "";
+
   const handlePointerDown = (e) => {
     // Stop propagation to prevent DndContext from interfering
     e.stopPropagation();
@@ -58,9 +65,17 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
     }
   };
 
+  const tooltipText = isCatering
+    ? `CATERING ORDER: ${displayName || itemGuid} - ${startTime || "TBD"} to ${
+        endTime || "TBD"
+      }`
+    : `${displayName || itemGuid} - ${startTime || "TBD"} to ${
+        endTime || "TBD"
+      }`;
+
   return (
     <div
-      className={`bake-card touch-card absolute border-2 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${className}`}
+      className={`bake-card touch-card absolute border-2 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${cateringStyle} ${className}`}
       style={style}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
@@ -71,11 +86,10 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
           onClick(e);
         }
       }}
-      title={`${displayName || itemGuid} - ${startTime || "TBD"} to ${
-        endTime || "TBD"
-      }`}
+      title={tooltipText}
     >
       <div className="text-white text-sm font-semibold truncate mb-1.5">
+        {isCatering && "🍽️ "}
         {displayName || itemGuid}
       </div>
       <div className="text-white text-xs space-y-1">

@@ -28,10 +28,7 @@ const io = new Server(httpServer, {
 });
 
 const PORT = process.env.PORT || 3001;
-// For Heroku and production, use 0.0.0.0 to bind to all interfaces
-const HOST =
-  process.env.HOST ||
-  (process.env.NODE_ENV === "production" ? "0.0.0.0" : "localhost");
+const HOST = process.env.HOST || "localhost";
 const MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/bakehouse";
 

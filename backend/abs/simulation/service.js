@@ -78,6 +78,10 @@ export class SimulationState {
     this.presetOrders = config.presetOrders || [];
     // Track processed orders by orderId+itemGuid to handle orders with multiple items
     this.processedOrders = new Set();
+
+    // Catering orders tracking
+    this.cateringOrders = new Map(); // orderId -> {orderId, items, requiredAvailableTime, orderPlacedAt, status, batches, movedBatches}
+    this.autoApproveCatering = false; // Auto-approve catering orders flag
   }
 
   addEvent(type, message, data = {}) {
@@ -1325,6 +1329,996 @@ export async function deleteSimulationBatch(simulationId, batchId) {
 }
 
 /**
+ * Create a catering order
+ * @param {string} simulationId - Simulation ID
+ * @param {Object} orderData - Order data
+ * @param {Array} orderData.items - Array of {itemGuid, quantity}
+ * @param {string} orderData.requiredAvailableTime - Time when items must be ready (HH:MM)
+ * @param {boolean} orderData.autoApprove - Whether to auto-approve this order
+ * @returns {Promise<Object>} Created order with batches
+ */
+export async function createCateringOrder(simulationId, orderData) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error("Simulation not found");
+  }
+
+  const { items, requiredAvailableTime, autoApprove = false } = orderData;
+
+  if (!items || !Array.isArray(items) || items.length === 0) {
+    throw new Error("Items array is required and must not be empty");
+  }
+
+  if (!requiredAvailableTime) {
+    throw new Error("requiredAvailableTime is required");
+  }
+
+  const currentTime = simulation.currentTime;
+
+  // Validate and parse requiredAvailableTime
+  if (typeof requiredAvailableTime !== "string") {
+    throw new Error(
+      `Invalid requiredAvailableTime type: expected string, got ${typeof requiredAvailableTime}. Value: ${JSON.stringify(
+        requiredAvailableTime
+      )}`
+    );
+  }
+
+  let requiredAvailableMinutes;
+  try {
+    requiredAvailableMinutes = parseTimeToMinutes(requiredAvailableTime);
+  } catch (error) {
+    throw new Error(
+      `Invalid requiredAvailableTime format: "${requiredAvailableTime}". ${error.message}`
+    );
+  }
+
+  if (
+    requiredAvailableMinutes === null ||
+    requiredAvailableMinutes === undefined
+  ) {
+    throw new Error("Invalid requiredAvailableTime format");
+  }
+
+  // Round pickup time to nearest 20-minute increment
+  const roundToTwentyMinuteIncrement = (minutes) => {
+    const increment = 20;
+    return Math.round(minutes / increment) * increment;
+  };
+
+  const roundedPickupTime = roundToTwentyMinuteIncrement(
+    requiredAvailableMinutes
+  );
+
+  // Validate 2-hour minimum notice
+  const noticeMinutes = roundedPickupTime - currentTime;
+  if (noticeMinutes < 120) {
+    throw new Error(
+      `Catering orders require at least 2 hours notice. Pickup time must be at least ${formatMinutesToTime(
+        currentTime + 120
+      )}`
+    );
+  }
+
+  // Validate within business hours
+  if (
+    roundedPickupTime < BUSINESS_HOURS.START_MINUTES ||
+    roundedPickupTime > BUSINESS_HOURS.END_MINUTES
+  ) {
+    throw new Error("Pickup time must be within business hours");
+  }
+
+  // Get bake specs for all items
+  const bakeSpecs = await getBakeSpecs();
+  const bakeSpecMap = new Map();
+  bakeSpecs.forEach((spec) => {
+    bakeSpecMap.set(spec.itemGuid, spec);
+  });
+
+  // Validate all items have bake specs
+  for (const item of items) {
+    if (!bakeSpecMap.has(item.itemGuid)) {
+      throw new Error(`No bake spec found for item: ${item.itemGuid}`);
+    }
+    if (!item.quantity || item.quantity <= 0) {
+      throw new Error(`Invalid quantity for item: ${item.itemGuid}`);
+    }
+  }
+
+  // Calculate batches needed per item
+  const itemBatchRequirements = [];
+  for (const item of items) {
+    const bakeSpec = bakeSpecMap.get(item.itemGuid);
+    const batchesNeeded = Math.ceil(item.quantity / bakeSpec.capacityPerRack);
+    const requiredStartTime =
+      roundedPickupTime -
+      bakeSpec.bakeTimeMinutes -
+      (bakeSpec.coolTimeMinutes || 0);
+    const roundedStartTime = roundToTwentyMinuteIncrement(
+      Math.max(BUSINESS_HOURS.START_MINUTES, requiredStartTime)
+    );
+
+    itemBatchRequirements.push({
+      itemGuid: item.itemGuid,
+      displayName: bakeSpec.displayName,
+      quantity: item.quantity,
+      batchesNeeded,
+      bakeSpec,
+      requiredStartTime: roundedStartTime,
+      requiredAvailableTime: roundedPickupTime,
+    });
+  }
+
+  // Build rack availability map
+  const allBatches = [
+    ...(simulation.batches || []),
+    ...(simulation.completedBatches || []),
+  ];
+  const rackEndTimes = new Map(); // rack -> end time
+
+  // Initialize all racks
+  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+    rackEndTimes.set(rack, 0);
+  }
+
+  // Calculate when each rack becomes available
+  allBatches.forEach((batch) => {
+    if (batch.rackPosition && batch.endTime) {
+      const batchEndTime = parseTimeToMinutes(batch.endTime);
+      const rack = batch.rackPosition;
+      const currentEndTime = rackEndTimes.get(rack) || 0;
+      if (batchEndTime > currentEndTime) {
+        rackEndTimes.set(rack, batchEndTime);
+      }
+    }
+  });
+
+  // Allocate racks for catering batches with staggering support
+  const cateringBatches = [];
+  const movedBatches = [];
+  const allocatedRacks = new Map(); // Track racks allocated at specific times: rack -> Set of time slots
+  let updatedAllBatches = null; // Will be set after moves to reflect updated batch positions
+
+  for (const itemReq of itemBatchRequirements) {
+    const {
+      itemGuid,
+      batchesNeeded,
+      bakeSpec,
+      requiredStartTime,
+      requiredAvailableTime,
+    } = itemReq;
+    const bakeTime = bakeSpec.bakeTimeMinutes;
+    const coolTime = bakeSpec.coolTimeMinutes || 0;
+    const requiredOven =
+      bakeSpec.oven !== null && bakeSpec.oven !== undefined
+        ? bakeSpec.oven
+        : null;
+
+    // Try to allocate all batches for this item
+    let batchesAllocated = 0;
+    let currentStartTime = requiredStartTime;
+    const maxStartTimeOffset = 120; // Can start up to 2 hours earlier
+    let startTimeOffset = 0;
+
+    while (
+      batchesAllocated < batchesNeeded &&
+      startTimeOffset <= maxStartTimeOffset
+    ) {
+      const tryStartTime = requiredStartTime - startTimeOffset;
+      const roundedTryStartTime = roundToTwentyMinuteIncrement(tryStartTime);
+
+      // Try to find racks at this time
+      const availableRacks = [];
+      const batchEndTime = roundedTryStartTime + bakeTime;
+
+      for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+        // Check if this rack is already allocated at this specific time slot
+        const allocatedTimes = allocatedRacks.get(rack);
+        if (allocatedTimes && allocatedTimes.has(roundedTryStartTime)) {
+          continue; // Already allocated at this time
+        }
+
+        const rackOven =
+          Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+        // Check oven requirement
+        if (requiredOven !== null && requiredOven !== rackOven) {
+          continue;
+        }
+
+        // Check for conflicts with existing batches on this rack
+        // Use updatedAllBatches if available (after moves), otherwise use allBatches
+        const batchesToCheck = updatedAllBatches || allBatches;
+        const hasConflict = batchesToCheck.some((b) => {
+          if (!b.rackPosition || b.rackPosition !== rack) return false;
+          if (!b.startTime || !b.endTime) return false;
+          // Skip batches we've already allocated in this catering order
+          // Note: cb.startTime is stored as a number (minutes), not a string
+          if (
+            cateringBatches.some(
+              (cb) =>
+                cb.rackPosition === rack && cb.startTime === roundedTryStartTime
+            )
+          ) {
+            return false;
+          }
+
+          const bStart = parseTimeToMinutes(b.startTime);
+          const bEnd = parseTimeToMinutes(b.endTime);
+
+          // Check if batches overlap
+          return (
+            (roundedTryStartTime >= bStart && roundedTryStartTime < bEnd) ||
+            (batchEndTime > bStart && batchEndTime <= bEnd) ||
+            (roundedTryStartTime <= bStart && batchEndTime >= bEnd)
+          );
+        });
+
+        if (!hasConflict && batchEndTime <= BUSINESS_HOURS.END_MINUTES) {
+          availableRacks.push(rack);
+        }
+      }
+
+      // Allocate as many batches as we can at this time
+      const batchesToAllocate = Math.min(
+        batchesNeeded - batchesAllocated,
+        availableRacks.length
+      );
+
+      for (let i = 0; i < batchesToAllocate; i++) {
+        const rack = availableRacks[i];
+
+        // Track this rack at this specific time slot
+        if (!allocatedRacks.has(rack)) {
+          allocatedRacks.set(rack, new Set());
+        }
+        allocatedRacks.get(rack).add(roundedTryStartTime);
+
+        const batchQuantity =
+          batchesAllocated === batchesNeeded - 1
+            ? itemReq.quantity - batchesAllocated * bakeSpec.capacityPerRack
+            : bakeSpec.capacityPerRack;
+
+        const batchEndTime = roundedTryStartTime + bakeTime;
+        const batchAvailableTime = batchEndTime + coolTime;
+
+        // Verify batch will be available by required time
+        if (batchAvailableTime > requiredAvailableTime) {
+          throw new Error(
+            `Cannot fulfill catering order: batch for ${itemReq.displayName} would not be ready in time`
+          );
+        }
+
+        cateringBatches.push({
+          itemGuid,
+          displayName: itemReq.displayName,
+          quantity: batchQuantity,
+          bakeTime,
+          coolTime,
+          oven: requiredOven,
+          freshWindowMinutes: bakeSpec.freshWindowMinutes,
+          restockThreshold: bakeSpec.restockThreshold || 20,
+          startTime: roundedTryStartTime,
+          endTime: batchEndTime,
+          availableTime: batchAvailableTime,
+          rackPosition: rack,
+        });
+
+        batchesAllocated++;
+      }
+
+      // If we still need more batches, try staggering (next 20-minute slot)
+      if (batchesAllocated < batchesNeeded) {
+        startTimeOffset += 20;
+      }
+    }
+
+    // If we couldn't allocate all batches, try to move existing batches
+    if (batchesAllocated < batchesNeeded) {
+      const batchesStillNeeded = batchesNeeded - batchesAllocated;
+      const racksToFree = batchesStillNeeded;
+
+      // Find batches that conflict with our required time slots
+      const conflictingBatches = simulation.batches.filter((batch) => {
+        if (batch.status !== "scheduled") return false;
+        if (!batch.rackPosition || !batch.startTime || !batch.endTime)
+          return false;
+
+        const batchStart = parseTimeToMinutes(batch.startTime);
+        const batchEnd = parseTimeToMinutes(batch.endTime);
+        const rackOven =
+          Math.floor((batch.rackPosition - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+        // Check if batch conflicts with our time window and oven requirement
+        const conflictsWithTime =
+          (batchStart >= requiredStartTime - maxStartTimeOffset &&
+            batchStart < requiredStartTime + bakeTime) ||
+          (batchEnd > requiredStartTime - maxStartTimeOffset &&
+            batchEnd <= requiredStartTime + bakeTime);
+
+        const conflictsWithOven =
+          requiredOven === null || requiredOven === rackOven;
+
+        return conflictsWithTime && conflictsWithOven;
+      });
+
+      // Sort by start time (move later batches first)
+      conflictingBatches.sort((a, b) => {
+        const timeA = parseTimeToMinutes(a.startTime);
+        const timeB = parseTimeToMinutes(b.startTime);
+        return timeB - timeA; // Later batches first
+      });
+
+      // Try to move batches to free up racks
+      let racksFreed = 0;
+      for (const conflictingBatch of conflictingBatches.slice(0, racksToFree)) {
+        // Find a new available slot for this batch
+        // Search outward from original time to find closest available slot
+        let newRack = null;
+        let newStartTime = null;
+
+        const originalStartTime = parseTimeToMinutes(
+          conflictingBatch.startTime
+        );
+        const batchOven =
+          conflictingBatch.oven !== null && conflictingBatch.oven !== undefined
+            ? conflictingBatch.oven
+            : null;
+
+        // Search outward: +20, -20, +40, -40, +60, -60, etc.
+        // This ensures we find the closest available slot
+        let offset = 20;
+        const maxOffset = Math.max(
+          BUSINESS_HOURS.END_MINUTES - originalStartTime,
+          originalStartTime - BUSINESS_HOURS.START_MINUTES
+        );
+
+        while (offset <= maxOffset && newRack === null) {
+          // Try later time first
+          const laterTime = originalStartTime + offset;
+          if (
+            laterTime <=
+            BUSINESS_HOURS.END_MINUTES - conflictingBatch.bakeTime
+          ) {
+            const roundedLaterTime = roundToTwentyMinuteIncrement(laterTime);
+            const laterEndTime = roundedLaterTime + conflictingBatch.bakeTime;
+
+            for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+              // Check if this rack is already allocated at this specific time slot
+              const allocatedTimes = allocatedRacks.get(rack);
+              if (allocatedTimes && allocatedTimes.has(roundedLaterTime)) {
+                continue;
+              }
+
+              const rackOven =
+                Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+              if (batchOven !== null && batchOven !== rackOven) {
+                continue;
+              }
+
+              // Check for conflicts with other batches on this rack
+              const hasConflict = simulation.batches.some((b) => {
+                if (b.batchId === conflictingBatch.batchId) return false;
+                if (b.rackPosition !== rack) return false;
+                if (!b.startTime || !b.endTime) return false;
+
+                const bStart = parseTimeToMinutes(b.startTime);
+                const bEnd = parseTimeToMinutes(b.endTime);
+
+                return (
+                  (roundedLaterTime >= bStart && roundedLaterTime < bEnd) ||
+                  (laterEndTime > bStart && laterEndTime <= bEnd) ||
+                  (roundedLaterTime <= bStart && laterEndTime >= bEnd)
+                );
+              });
+
+              if (!hasConflict) {
+                newRack = rack;
+                newStartTime = roundedLaterTime;
+                break;
+              }
+            }
+          }
+
+          // If not found, try earlier time
+          if (newRack === null) {
+            const earlierTime = originalStartTime - offset;
+            if (earlierTime >= BUSINESS_HOURS.START_MINUTES) {
+              const roundedEarlierTime =
+                roundToTwentyMinuteIncrement(earlierTime);
+              const earlierEndTime =
+                roundedEarlierTime + conflictingBatch.bakeTime;
+
+              for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+                // Check if this rack is already allocated at this specific time slot
+                const allocatedTimes = allocatedRacks.get(rack);
+                if (allocatedTimes && allocatedTimes.has(roundedEarlierTime)) {
+                  continue;
+                }
+
+                const rackOven =
+                  Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+                if (batchOven !== null && batchOven !== rackOven) {
+                  continue;
+                }
+
+                // Check for conflicts with other batches on this rack
+                const hasConflict = simulation.batches.some((b) => {
+                  if (b.batchId === conflictingBatch.batchId) return false;
+                  if (b.rackPosition !== rack) return false;
+                  if (!b.startTime || !b.endTime) return false;
+
+                  const bStart = parseTimeToMinutes(b.startTime);
+                  const bEnd = parseTimeToMinutes(b.endTime);
+
+                  return (
+                    (roundedEarlierTime >= bStart &&
+                      roundedEarlierTime < bEnd) ||
+                    (earlierEndTime > bStart && earlierEndTime <= bEnd) ||
+                    (roundedEarlierTime <= bStart && earlierEndTime >= bEnd)
+                  );
+                });
+
+                if (!hasConflict) {
+                  newRack = rack;
+                  newStartTime = roundedEarlierTime;
+                  break;
+                }
+              }
+            }
+          }
+
+          // Increase offset for next iteration
+          offset += 20;
+        }
+
+        if (newRack !== null && newStartTime !== null) {
+          // Move the batch
+          const oldStartTime = conflictingBatch.startTime;
+          const oldRack = conflictingBatch.rackPosition;
+
+          conflictingBatch.startTime = formatMinutesToTime(newStartTime);
+          conflictingBatch.endTime = formatMinutesToTime(
+            newStartTime + conflictingBatch.bakeTime
+          );
+          conflictingBatch.availableTime = formatMinutesToTime(
+            newStartTime +
+              conflictingBatch.bakeTime +
+              (conflictingBatch.coolTime || 0)
+          );
+          conflictingBatch.rackPosition = newRack;
+          conflictingBatch.oven =
+            Math.floor((newRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+          // Update rack end time
+          rackEndTimes.set(newRack, newStartTime + conflictingBatch.bakeTime);
+
+          movedBatches.push({
+            batchId: conflictingBatch.batchId,
+            displayName: conflictingBatch.displayName,
+            oldStartTime,
+            newStartTime: conflictingBatch.startTime,
+            oldRack,
+            newRack,
+          });
+
+          racksFreed++;
+          // Note: We don't add newRack to allocatedRacks because allocatedRacks
+          // tracks racks allocated to NEW catering batches, not moved batches.
+          // Moved batches can share racks with other moved batches at different times.
+        } else {
+          // Can't move this batch, reject order
+          throw new Error(
+            `Cannot fulfill catering order: unable to free up enough racks. Would need to move batch ${conflictingBatch.displayName} but no alternative slot available.`
+          );
+        }
+      }
+
+      // Now try to allocate remaining batches
+      if (racksFreed > 0) {
+        // Rebuild rackEndTimes map after moves to reflect new batch positions
+        for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+          rackEndTimes.set(rack, 0);
+        }
+
+        // Recalculate rack end times including moved batches
+        updatedAllBatches = [
+          ...(simulation.batches || []),
+          ...(simulation.completedBatches || []),
+        ];
+        updatedAllBatches.forEach((batch) => {
+          if (batch.rackPosition && batch.endTime) {
+            const batchEndTime = parseTimeToMinutes(batch.endTime);
+            const rack = batch.rackPosition;
+            const currentEndTime = rackEndTimes.get(rack) || 0;
+            if (batchEndTime > currentEndTime) {
+              rackEndTimes.set(rack, batchEndTime);
+            }
+          }
+        });
+
+        // Try to allocate remaining batches
+        let additionalBatchesAllocated = 0;
+        startTimeOffset = 0;
+
+        while (
+          additionalBatchesAllocated < batchesStillNeeded &&
+          startTimeOffset <= maxStartTimeOffset
+        ) {
+          const tryStartTime = requiredStartTime - startTimeOffset;
+          const roundedTryStartTime =
+            roundToTwentyMinuteIncrement(tryStartTime);
+
+          const availableRacks = [];
+          const batchEndTime = roundedTryStartTime + bakeTime;
+
+          for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+            // Check if this rack is already allocated at this specific time slot
+            const allocatedTimes = allocatedRacks.get(rack);
+            if (allocatedTimes && allocatedTimes.has(roundedTryStartTime)) {
+              continue;
+            }
+
+            const rackOven =
+              Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+            if (requiredOven !== null && requiredOven !== rackOven) {
+              continue;
+            }
+
+            // Check for conflicts with existing batches on this rack
+            // After moves, use updated batch list, otherwise use original
+            const batchesToCheck = updatedAllBatches || allBatches;
+            const hasConflict = batchesToCheck.some((b) => {
+              if (!b.rackPosition || b.rackPosition !== rack) return false;
+              if (!b.startTime || !b.endTime) return false;
+              // Skip batches we've already allocated in this catering order
+              // Note: cb.startTime is stored as a number (minutes), not a string
+              if (
+                cateringBatches.some(
+                  (cb) =>
+                    cb.rackPosition === rack &&
+                    cb.startTime === roundedTryStartTime
+                )
+              ) {
+                return false;
+              }
+
+              const bStart = parseTimeToMinutes(b.startTime);
+              const bEnd = parseTimeToMinutes(b.endTime);
+
+              // Check if batches overlap
+              return (
+                (roundedTryStartTime >= bStart && roundedTryStartTime < bEnd) ||
+                (batchEndTime > bStart && batchEndTime <= bEnd) ||
+                (roundedTryStartTime <= bStart && batchEndTime >= bEnd)
+              );
+            });
+
+            if (!hasConflict && batchEndTime <= BUSINESS_HOURS.END_MINUTES) {
+              availableRacks.push(rack);
+            }
+          }
+
+          const batchesToAllocate = Math.min(
+            batchesStillNeeded - additionalBatchesAllocated,
+            availableRacks.length
+          );
+
+          for (let i = 0; i < batchesToAllocate; i++) {
+            const rack = availableRacks[i];
+
+            // Track this rack at this specific time slot
+            if (!allocatedRacks.has(rack)) {
+              allocatedRacks.set(rack, new Set());
+            }
+            allocatedRacks.get(rack).add(roundedTryStartTime);
+
+            const batchQuantity =
+              batchesAllocated + additionalBatchesAllocated ===
+              batchesNeeded - 1
+                ? itemReq.quantity -
+                  (batchesAllocated + additionalBatchesAllocated) *
+                    bakeSpec.capacityPerRack
+                : bakeSpec.capacityPerRack;
+
+            const batchEndTime = roundedTryStartTime + bakeTime;
+            const batchAvailableTime = batchEndTime + coolTime;
+
+            if (batchAvailableTime > requiredAvailableTime) {
+              throw new Error(
+                `Cannot fulfill catering order: batch for ${itemReq.displayName} would not be ready in time`
+              );
+            }
+
+            cateringBatches.push({
+              itemGuid,
+              displayName: itemReq.displayName,
+              quantity: batchQuantity,
+              bakeTime,
+              coolTime,
+              oven: requiredOven,
+              freshWindowMinutes: bakeSpec.freshWindowMinutes,
+              restockThreshold: bakeSpec.restockThreshold || 20,
+              startTime: roundedTryStartTime,
+              endTime: batchEndTime,
+              availableTime: batchAvailableTime,
+              rackPosition: rack,
+            });
+
+            additionalBatchesAllocated++;
+          }
+
+          if (additionalBatchesAllocated < batchesStillNeeded) {
+            startTimeOffset += 20;
+          }
+        }
+
+        if (additionalBatchesAllocated < batchesStillNeeded) {
+          throw new Error(
+            `Cannot fulfill catering order: unable to allocate enough racks for ${itemReq.displayName}`
+          );
+        }
+      }
+    }
+  }
+
+  // Create batch objects and add to simulation
+  const orderId = uuidv4();
+  const createdBatches = [];
+
+  for (const batchData of cateringBatches) {
+    const batchId = uuidv4();
+    const selectedOven =
+      Math.floor((batchData.rackPosition - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+    const newBatch = {
+      batchId,
+      itemGuid: batchData.itemGuid,
+      displayName: batchData.displayName,
+      quantity: batchData.quantity,
+      bakeTime: batchData.bakeTime,
+      coolTime: batchData.coolTime || 0,
+      oven: selectedOven,
+      freshWindowMinutes: batchData.freshWindowMinutes,
+      restockThreshold: batchData.restockThreshold,
+      rackPosition: batchData.rackPosition,
+      startTime: formatMinutesToTime(batchData.startTime),
+      endTime: formatMinutesToTime(batchData.endTime),
+      availableTime: formatMinutesToTime(batchData.availableTime),
+      status: "scheduled",
+      startedAt: null,
+      pulledAt: null,
+      availableAt: null,
+      isCatering: true,
+      cateringOrderId: orderId,
+    };
+
+    simulation.batches.push(newBatch);
+    createdBatches.push(newBatch);
+
+    // Update rack end time
+    rackEndTimes.set(batchData.rackPosition, batchData.endTime);
+  }
+
+  // Sort batches by start time
+  simulation.batches.sort((a, b) => {
+    const timeA = parseTimeToMinutes(a.startTime);
+    const timeB = parseTimeToMinutes(b.startTime);
+    return timeA - timeB;
+  });
+
+  // Determine order status
+  const shouldAutoApprove = autoApprove || simulation.autoApproveCatering;
+  const orderStatus = shouldAutoApprove ? "approved" : "pending";
+
+  // Create catering order record
+  const cateringOrder = {
+    orderId,
+    items: items.map((item) => ({
+      itemGuid: item.itemGuid,
+      quantity: item.quantity,
+      displayName: bakeSpecMap.get(item.itemGuid).displayName,
+    })),
+    requiredAvailableTime: formatMinutesToTime(roundedPickupTime),
+    orderPlacedAt: formatMinutesToTime(currentTime),
+    status: orderStatus,
+    batches: createdBatches.map((b) => ({
+      batchId: b.batchId,
+      itemGuid: b.itemGuid,
+      displayName: b.displayName,
+      quantity: b.quantity,
+      rackPosition: b.rackPosition,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      availableTime: b.availableTime,
+    })),
+    movedBatches: movedBatches,
+  };
+
+  simulation.cateringOrders.set(orderId, cateringOrder);
+
+  // Log event
+  if (orderStatus === "approved") {
+    simulation.addEvent(
+      "catering_order_approved",
+      `Catering order approved: ${
+        items.length
+      } item(s) for pickup at ${formatMinutesToTime(roundedPickupTime)}`,
+      {
+        orderId,
+        items: items.map((i) => ({
+          itemGuid: i.itemGuid,
+          quantity: i.quantity,
+        })),
+        pickupTime: formatMinutesToTime(roundedPickupTime),
+        batchesCreated: createdBatches.length,
+        batchesMoved: movedBatches.length,
+      }
+    );
+  } else {
+    simulation.addEvent(
+      "catering_order_pending",
+      `Catering order pending approval: ${
+        items.length
+      } item(s) for pickup at ${formatMinutesToTime(roundedPickupTime)}`,
+      {
+        orderId,
+        items: items.map((i) => ({
+          itemGuid: i.itemGuid,
+          quantity: i.quantity,
+        })),
+        pickupTime: formatMinutesToTime(roundedPickupTime),
+        batchesCreated: createdBatches.length,
+        batchesMoved: movedBatches.length,
+      }
+    );
+  }
+
+  // Update database schedule if needed
+  if (simulation.scheduleId && orderStatus === "approved") {
+    for (const batch of createdBatches) {
+      try {
+        await updateScheduleBatch(simulation.scheduleId, batch.batchId, batch);
+      } catch (error) {
+        console.error("Failed to save catering batch to database:", error);
+      }
+    }
+  }
+
+  return {
+    success: true,
+    orderId,
+    status: orderStatus,
+    batches: createdBatches.map((b) => ({
+      batchId: b.batchId,
+      itemGuid: b.itemGuid,
+      displayName: b.displayName,
+      quantity: b.quantity,
+      rackPosition: b.rackPosition,
+      startTime: b.startTime,
+      endTime: b.endTime,
+      availableTime: b.availableTime,
+    })),
+    movedBatches,
+    warnings:
+      movedBatches.length > 0
+        ? [
+            `${movedBatches.length} existing batch(es) were moved to accommodate this order`,
+          ]
+        : [],
+  };
+}
+
+/**
+ * Approve a pending catering order
+ * @param {string} simulationId - Simulation ID
+ * @param {string} orderId - Catering order ID
+ * @returns {Promise<Object>} Updated order
+ */
+export async function approveCateringOrder(simulationId, orderId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error("Simulation not found");
+  }
+
+  const order = simulation.cateringOrders.get(orderId);
+  if (!order) {
+    throw new Error("Catering order not found");
+  }
+
+  if (order.status === "approved") {
+    throw new Error("Order is already approved");
+  }
+
+  if (order.status === "rejected") {
+    throw new Error("Order has already been rejected");
+  }
+
+  order.status = "approved";
+
+  // Update database schedule
+  if (simulation.scheduleId) {
+    for (const batchInfo of order.batches) {
+      const batch = simulation.batches.find(
+        (b) => b.batchId === batchInfo.batchId
+      );
+      if (batch) {
+        try {
+          await updateScheduleBatch(
+            simulation.scheduleId,
+            batch.batchId,
+            batch
+          );
+        } catch (error) {
+          console.error("Failed to save catering batch to database:", error);
+        }
+      }
+    }
+  }
+
+  simulation.addEvent(
+    "catering_order_approved",
+    `Catering order approved: ${order.items.length} item(s) for pickup at ${order.requiredAvailableTime}`,
+    {
+      orderId,
+      items: order.items,
+      pickupTime: order.requiredAvailableTime,
+    }
+  );
+
+  return {
+    success: true,
+    order: {
+      orderId: order.orderId,
+      items: order.items,
+      requiredAvailableTime: order.requiredAvailableTime,
+      orderPlacedAt: order.orderPlacedAt,
+      status: order.status,
+      batches: order.batches,
+      movedBatches: order.movedBatches,
+    },
+  };
+}
+
+/**
+ * Reject a pending catering order
+ * @param {string} simulationId - Simulation ID
+ * @param {string} orderId - Catering order ID
+ * @returns {Promise<Object>} Rejection result
+ */
+export async function rejectCateringOrder(simulationId, orderId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error("Simulation not found");
+  }
+
+  const order = simulation.cateringOrders.get(orderId);
+  if (!order) {
+    throw new Error("Catering order not found");
+  }
+
+  if (order.status === "rejected") {
+    throw new Error("Order has already been rejected");
+  }
+
+  if (order.status === "approved") {
+    throw new Error("Cannot reject an approved order");
+  }
+
+  // Delete created batches
+  for (const batchInfo of order.batches) {
+    const batchIndex = simulation.batches.findIndex(
+      (b) => b.batchId === batchInfo.batchId
+    );
+    if (batchIndex !== -1) {
+      simulation.batches.splice(batchIndex, 1);
+    }
+
+    // Delete from database if exists
+    if (simulation.scheduleId) {
+      try {
+        await deleteScheduleBatch(simulation.scheduleId, batchInfo.batchId);
+      } catch (error) {
+        console.error("Failed to delete catering batch from database:", error);
+      }
+    }
+  }
+
+  // Restore moved batches to original positions
+  for (const movedBatch of order.movedBatches) {
+    const batch = simulation.batches.find(
+      (b) => b.batchId === movedBatch.batchId
+    );
+    if (batch) {
+      batch.startTime = movedBatch.oldStartTime;
+      batch.rackPosition = movedBatch.oldRack;
+      const oldStartMinutes = parseTimeToMinutes(movedBatch.oldStartTime);
+      batch.endTime = formatMinutesToTime(oldStartMinutes + batch.bakeTime);
+      batch.availableTime = formatMinutesToTime(
+        oldStartMinutes + batch.bakeTime + (batch.coolTime || 0)
+      );
+      batch.oven =
+        Math.floor((movedBatch.oldRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+      // Update database
+      if (simulation.scheduleId) {
+        try {
+          await updateScheduleBatch(
+            simulation.scheduleId,
+            batch.batchId,
+            batch
+          );
+        } catch (error) {
+          console.error("Failed to restore moved batch in database:", error);
+        }
+      }
+    }
+  }
+
+  order.status = "rejected";
+
+  simulation.addEvent(
+    "catering_order_rejected",
+    `Catering order rejected: ${order.items.length} item(s) for pickup at ${order.requiredAvailableTime}`,
+    {
+      orderId,
+      items: order.items,
+      pickupTime: order.requiredAvailableTime,
+    }
+  );
+
+  return {
+    success: true,
+    orderId,
+  };
+}
+
+/**
+ * Get all catering orders for a simulation
+ * @param {string} simulationId - Simulation ID
+ * @returns {Promise<Array>} Array of catering orders
+ */
+export function getCateringOrders(simulationId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error("Simulation not found");
+  }
+
+  return Array.from(simulation.cateringOrders.values());
+}
+
+/**
+ * Set auto-approve setting for catering orders
+ * @param {string} simulationId - Simulation ID
+ * @param {boolean} enabled - Whether to auto-approve
+ * @returns {Promise<Object>} Updated setting
+ */
+export function setAutoApproveCatering(simulationId, enabled) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error("Simulation not found");
+  }
+
+  simulation.autoApproveCatering = enabled;
+
+  simulation.addEvent(
+    "catering_auto_approve_changed",
+    `Catering order auto-approval ${enabled ? "enabled" : "disabled"}`,
+    {
+      enabled,
+    }
+  );
+
+  return {
+    success: true,
+    autoApproveCatering: enabled,
+  };
+}
+
+/**
  * Clean up stopped/completed simulations older than 1 hour
  */
 export function cleanupOldSimulations() {
@@ -1378,6 +2372,8 @@ export function updateAllSimulations(io) {
             startTime: b.startTime,
             endTime: b.endTime,
             availableTime: b.availableTime,
+            isCatering: b.isCatering || false,
+            cateringOrderId: b.cateringOrderId || null,
           })),
           completedBatches: (updated.completedBatches || []).map((b) => ({
             batchId: b.batchId,
@@ -1408,6 +2404,8 @@ export function updateAllSimulations(io) {
             updated.processedOrdersByItem.values()
           ),
           mode: updated.mode,
+          cateringOrders: Array.from(updated.cateringOrders.values()),
+          autoApproveCatering: updated.autoApproveCatering,
         };
         io.to(`simulation:${id}`).emit("simulation_update", updateData);
         if (updated.mode === "manual") {

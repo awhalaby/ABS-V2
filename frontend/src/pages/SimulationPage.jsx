@@ -12,6 +12,8 @@ import Stockout from "../components/domain/Stockout.jsx";
 import ActualOrders from "../components/domain/ActualOrders.jsx";
 import VisualInventory from "../components/domain/VisualInventory.jsx";
 import SuggestedBatches from "../components/domain/SuggestedBatches.jsx";
+import CateringOrderForm from "../components/domain/CateringOrderForm.jsx";
+import CateringOrdersList from "../components/domain/CateringOrdersList.jsx";
 
 export default function SimulationPage() {
   const [loading, setLoading] = useState(false);
@@ -35,12 +37,14 @@ export default function SimulationPage() {
   const [bakeSpecs, setBakeSpecs] = useState([]);
   const [suggestedBatchesEnabled, setSuggestedBatchesEnabled] = useState(false);
   const [autoAddSuggestedBatches, setAutoAddSuggestedBatches] = useState(false);
+  const [autoApproveCatering, setAutoApproveCatering] = useState(false);
+  const [cateringOrders, setCateringOrders] = useState([]);
   const [websocketConnected, setWebsocketConnected] = useState(false);
   const isMovingBatchRef = useRef(false);
   const socketRef = useRef(null);
 
-  // Update available items function
-  const updateAvailableItems = async () => {
+  // Update available items function - memoized to prevent infinite loops
+  const updateAvailableItems = useCallback(async () => {
     if (!simulationId) return;
     try {
       const response = await simulationAPI.getAvailableItems(simulationId);
@@ -48,7 +52,7 @@ export default function SimulationPage() {
     } catch (err) {
       console.error("Failed to fetch available items:", err);
     }
-  };
+  }, [simulationId]);
 
   // Initialize WebSocket connection
   useEffect(() => {
@@ -98,6 +102,13 @@ export default function SimulationPage() {
           if (data.inventory) {
             updateAvailableItems();
           }
+          // Update catering orders
+          if (data.cateringOrders) {
+            setCateringOrders(data.cateringOrders);
+          }
+          if (data.autoApproveCatering !== undefined) {
+            setAutoApproveCatering(data.autoApproveCatering);
+          }
         }
       });
 
@@ -126,7 +137,7 @@ export default function SimulationPage() {
         setWebsocketConnected(false);
       };
     }
-  }, [simulationId]);
+  }, [simulationId, updateAvailableItems]);
 
   // Load bake specs for freshness windows
   useEffect(() => {
@@ -166,7 +177,7 @@ export default function SimulationPage() {
           });
 
           // Only update available items if simulation is running
-          if (newData?.status === "running") {
+          if (newData?.status === "running" && newData.mode === "manual") {
             updateAvailableItems();
           }
         } catch (err) {
@@ -175,14 +186,14 @@ export default function SimulationPage() {
             err
           );
         }
-      }, 50); // Poll every 500ms for smoother updates
+      }, 500); // Poll every 500ms for smoother updates
 
       return () => {
         console.log("[SimulationPage] Clearing polling interval");
         clearInterval(interval);
       };
     }
-  }, [simulationId, websocketConnected]);
+  }, [simulationId, websocketConnected, updateAvailableItems]);
 
   // Load available items when simulation starts (manual mode only)
   useEffect(() => {
@@ -192,7 +203,7 @@ export default function SimulationPage() {
       const interval = setInterval(updateAvailableItems, 2000);
       return () => clearInterval(interval);
     }
-  }, [simulationId, simulation?.mode]);
+  }, [simulationId, simulation?.mode, updateAvailableItems]);
 
   // Load available dates for preset mode
   useEffect(() => {
@@ -431,6 +442,50 @@ export default function SimulationPage() {
     JSON.stringify((simulation?.batches || []).map((b) => b.batchId)),
     JSON.stringify((simulation?.completedBatches || []).map((b) => b.batchId)),
   ]);
+
+  // Handle catering order submission
+  const handleCateringOrderSubmit = useCallback(async () => {
+    // Refresh simulation to get updated catering orders
+    if (simulationId) {
+      try {
+        const response = await simulationAPI.getStatus(simulationId);
+        if (response.data) {
+          setSimulation(response.data);
+          if (response.data.cateringOrders) {
+            setCateringOrders(response.data.cateringOrders);
+          }
+          if (response.data.autoApproveCatering !== undefined) {
+            setAutoApproveCatering(response.data.autoApproveCatering);
+          }
+        }
+      } catch (err) {
+        console.error("Failed to refresh simulation:", err);
+      }
+    }
+  }, [simulationId]);
+
+  // Handle catering order update (approve/reject)
+  const handleCateringOrderUpdate = useCallback(async () => {
+    await handleCateringOrderSubmit();
+  }, [handleCateringOrderSubmit]);
+
+  // Handle auto-approve toggle
+  const handleAutoApproveToggle = useCallback(
+    async (enabled) => {
+      if (!simulationId) return;
+      try {
+        await simulationAPI.setAutoApproveCatering(simulationId, enabled);
+        setAutoApproveCatering(enabled);
+      } catch (err) {
+        console.error("Failed to update auto-approve setting:", err);
+        alert(
+          err.response?.data?.error?.message ||
+            "Failed to update auto-approve setting"
+        );
+      }
+    },
+    [simulationId]
+  );
 
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -939,6 +994,50 @@ export default function SimulationPage() {
               currentSimulationTime={simulation?.currentTime || null}
             />
           )}
+
+          {/* Catering Orders Section */}
+          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+            {/* Catering Order Form */}
+            <CateringOrderForm
+              simulationId={simulationId}
+              bakeSpecs={bakeSpecs}
+              currentSimulationTime={simulation?.currentTime || null}
+              autoApprove={autoApproveCatering}
+              onSubmit={handleCateringOrderSubmit}
+              onError={(err) => {
+                console.error("Catering order error:", err);
+              }}
+            />
+
+            {/* Catering Orders List */}
+            <div className="space-y-4">
+              <div className="bg-white p-4 rounded-lg border border-gray-200">
+                <div className="flex items-center justify-between mb-4">
+                  <h3 className="text-lg font-semibold text-gray-900">
+                    Auto-Approve
+                  </h3>
+                  <label className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      checked={autoApproveCatering}
+                      onChange={(e) =>
+                        handleAutoApproveToggle(e.target.checked)
+                      }
+                      className="w-4 h-4 text-blue-600 border-gray-300 rounded focus:ring-blue-500"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Auto-approve catering orders
+                    </span>
+                  </label>
+                </div>
+              </div>
+              <CateringOrdersList
+                simulationId={simulationId}
+                cateringOrders={cateringOrders}
+                onOrderUpdate={handleCateringOrderUpdate}
+              />
+            </div>
+          </div>
 
           {/* Fifth Row: POS/Order Status and Recent Events Side by Side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

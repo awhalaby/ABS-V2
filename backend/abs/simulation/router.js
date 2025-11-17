@@ -11,6 +11,11 @@ import {
   moveSimulationBatchController,
   addSimulationBatchController,
   getSuggestedBatchesController,
+  createCateringOrderController,
+  approveCateringOrderController,
+  rejectCateringOrderController,
+  getCateringOrdersController,
+  setAutoApproveCateringController,
 } from "./controller.js";
 import {
   purchaseItemsController,
@@ -62,5 +67,30 @@ router.post("/:id/batch/add", addSimulationBatchController);
 
 // GET /api/abs/simulation/:id/suggested-batches - Get suggested batches
 router.get("/:id/suggested-batches", getSuggestedBatchesController);
+
+// Catering order routes
+// POST /api/abs/simulation/:id/catering-order - Create a catering order
+router.post("/:id/catering-order", createCateringOrderController);
+
+// POST /api/abs/simulation/:id/catering-order/:orderId/approve - Approve a pending catering order
+router.post(
+  "/:id/catering-order/:orderId/approve",
+  approveCateringOrderController
+);
+
+// POST /api/abs/simulation/:id/catering-order/:orderId/reject - Reject a pending catering order
+router.post(
+  "/:id/catering-order/:orderId/reject",
+  rejectCateringOrderController
+);
+
+// GET /api/abs/simulation/:id/catering-orders - Get all catering orders
+router.get("/:id/catering-orders", getCateringOrdersController);
+
+// POST /api/abs/simulation/:id/catering-order/auto-approve - Set auto-approve setting
+router.post(
+  "/:id/catering-order/auto-approve",
+  setAutoApproveCateringController
+);
 
 export default router;

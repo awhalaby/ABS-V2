@@ -11,6 +11,11 @@ import {
   moveSimulationBatch,
   addSimulationBatch,
   calculateSuggestedBatches,
+  createCateringOrder,
+  approveCateringOrder,
+  rejectCateringOrder,
+  getCateringOrders,
+  setAutoApproveCatering,
 } from "./service.js";
 
 /**
@@ -172,6 +177,8 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
         startTime: b.startTime,
         endTime: b.endTime,
         availableTime: b.availableTime,
+        isCatering: b.isCatering || false,
+        cateringOrderId: b.cateringOrderId || null,
       })),
       completedBatches: (simulation.completedBatches || []).map((b) => ({
         batchId: b.batchId,
@@ -185,6 +192,8 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
         endTime: b.endTime,
         availableTime: b.availableTime,
         availableAt: b.availableAt, // Include availableAt (minutes) for freshness tracking
+        isCatering: b.isCatering || false,
+        cateringOrderId: b.cateringOrderId || null,
       })),
       forecast: simulation.forecast || [],
       recentEvents: simulation.events.slice(-10), // Last 10 events
@@ -192,6 +201,8 @@ export const getSimulationStatusController = asyncHandler(async (req, res) => {
       processedOrdersByItem: Array.from(
         simulation.processedOrdersByItem.values()
       ),
+      cateringOrders: Array.from(simulation.cateringOrders.values()),
+      autoApproveCatering: simulation.autoApproveCatering,
     },
   });
 });
@@ -584,3 +595,86 @@ export const addSimulationBatchController = asyncHandler(async (req, res) => {
     },
   });
 });
+
+/**
+ * Create a catering order
+ * POST /api/abs/simulation/:id/catering-order
+ */
+export const createCateringOrderController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const { items, requiredAvailableTime, autoApprove } = req.body;
+
+  const result = await createCateringOrder(id, {
+    items,
+    requiredAvailableTime,
+    autoApprove,
+  });
+
+  res.status(200).json({
+    success: true,
+    data: result,
+  });
+});
+
+/**
+ * Approve a pending catering order
+ * POST /api/abs/simulation/:id/catering-order/:orderId/approve
+ */
+export const approveCateringOrderController = asyncHandler(async (req, res) => {
+  const { id, orderId } = req.params;
+
+  const result = await approveCateringOrder(id, orderId);
+
+  res.status(200).json({
+    success: true,
+    data: result,
+  });
+});
+
+/**
+ * Reject a pending catering order
+ * POST /api/abs/simulation/:id/catering-order/:orderId/reject
+ */
+export const rejectCateringOrderController = asyncHandler(async (req, res) => {
+  const { id, orderId } = req.params;
+
+  const result = await rejectCateringOrder(id, orderId);
+
+  res.status(200).json({
+    success: true,
+    data: result,
+  });
+});
+
+/**
+ * Get all catering orders for a simulation
+ * GET /api/abs/simulation/:id/catering-orders
+ */
+export const getCateringOrdersController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  const orders = getCateringOrders(id);
+
+  res.status(200).json({
+    success: true,
+    data: orders,
+  });
+});
+
+/**
+ * Set auto-approve setting for catering orders
+ * POST /api/abs/simulation/:id/catering-order/auto-approve
+ */
+export const setAutoApproveCateringController = asyncHandler(
+  async (req, res) => {
+    const { id } = req.params;
+    const { enabled } = req.body;
+
+    const result = setAutoApproveCatering(id, enabled);
+
+    res.status(200).json({
+      success: true,
+      data: result,
+    });
+  }
+);

@@ -175,4 +175,17 @@ export const simulationAPI = {
     api.post(`/api/abs/simulation/${id}/batch/add`, batchData),
   getSuggestedBatches: (id) =>
     api.get(`/api/abs/simulation/${id}/suggested-batches`),
+  // Catering orders
+  createCateringOrder: (id, orderData) =>
+    api.post(`/api/abs/simulation/${id}/catering-order`, orderData),
+  approveCateringOrder: (id, orderId) =>
+    api.post(`/api/abs/simulation/${id}/catering-order/${orderId}/approve`),
+  rejectCateringOrder: (id, orderId) =>
+    api.post(`/api/abs/simulation/${id}/catering-order/${orderId}/reject`),
+  getCateringOrders: (id) =>
+    api.get(`/api/abs/simulation/${id}/catering-orders`),
+  setAutoApproveCatering: (id, enabled) =>
+    api.post(`/api/abs/simulation/${id}/catering-order/auto-approve`, {
+      enabled,
+    }),
 };
