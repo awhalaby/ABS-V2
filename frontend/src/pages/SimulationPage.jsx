@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { simulationAPI, bakespecsAPI } from "../utils/api.js";
 import { formatTime, formatNumber } from "../utils/formatters.js";
 import { format as formatDateFns, addDays } from "date-fns";
@@ -11,6 +11,7 @@ import ExpectedOrders from "../components/domain/ExpectedOrders.jsx";
 import Stockout from "../components/domain/Stockout.jsx";
 import ActualOrders from "../components/domain/ActualOrders.jsx";
 import VisualInventory from "../components/domain/VisualInventory.jsx";
+import SuggestedBatches from "../components/domain/SuggestedBatches.jsx";
 
 export default function SimulationPage() {
   const [loading, setLoading] = useState(false);
@@ -32,6 +33,9 @@ export default function SimulationPage() {
   const [availableItems, setAvailableItems] = useState([]);
   const [purchasing, setPurchasing] = useState(false);
   const [bakeSpecs, setBakeSpecs] = useState([]);
+  const [suggestedBatchesEnabled, setSuggestedBatchesEnabled] = useState(false);
+  const [autoAddSuggestedBatches, setAutoAddSuggestedBatches] = useState(false);
+  const [websocketConnected, setWebsocketConnected] = useState(false);
   const isMovingBatchRef = useRef(false);
   const socketRef = useRef(null);
 
@@ -49,17 +53,47 @@ export default function SimulationPage() {
   // Initialize WebSocket connection
   useEffect(() => {
     if (simulationId) {
-      socketRef.current = io(WEBSOCKET_URL);
+      console.log(
+        "[SimulationPage] Attempting WebSocket connection to:",
+        WEBSOCKET_URL
+      );
+      socketRef.current = io(WEBSOCKET_URL, {
+        timeout: 5000,
+        reconnection: true,
+        reconnectionAttempts: 3,
+        reconnectionDelay: 1000,
+      });
 
       socketRef.current.on("connect", () => {
-        console.log("WebSocket connected");
+        console.log("[SimulationPage] WebSocket connected successfully");
+        setWebsocketConnected(true);
         socketRef.current.emit("joinSimulation", simulationId);
+      });
+
+      socketRef.current.on("connect_error", (error) => {
+        console.error("[SimulationPage] WebSocket connection error:", error);
+        setWebsocketConnected(false);
+      });
+
+      socketRef.current.on("disconnect", (reason) => {
+        console.log("[SimulationPage] WebSocket disconnected:", reason);
+        setWebsocketConnected(false);
       });
 
       socketRef.current.on("simulation_update", (data) => {
         // Don't overwrite local state if we're in the middle of moving a batch
         if (!isMovingBatchRef.current) {
-          setSimulation(data);
+          // Use functional update to merge smoothly
+          setSimulation((prev) => {
+            if (!prev) return data;
+            // Merge updates smoothly to prevent jumps
+            return {
+              ...prev,
+              ...data,
+              // Ensure time updates smoothly
+              currentTime: data.currentTime || prev.currentTime,
+            };
+          });
           // Update available items from inventory
           if (data.inventory) {
             updateAvailableItems();
@@ -83,15 +117,13 @@ export default function SimulationPage() {
         updateAvailableItems();
       });
 
-      socketRef.current.on("disconnect", () => {
-        console.log("WebSocket disconnected");
-      });
-
       return () => {
         if (socketRef.current) {
           socketRef.current.emit("leaveSimulation", simulationId);
           socketRef.current.disconnect();
+          socketRef.current = null;
         }
+        setWebsocketConnected(false);
       };
     }
   }, [simulationId]);
@@ -109,22 +141,48 @@ export default function SimulationPage() {
     loadBakeSpecs();
   }, []);
 
-  // Poll for simulation status if not using WebSocket
+  // Poll for simulation status if WebSocket is not connected
   useEffect(() => {
-    if (simulationId && !socketRef.current) {
+    if (simulationId && !websocketConnected) {
+      console.log(
+        "[SimulationPage] WebSocket not connected, using polling fallback"
+      );
+
       const interval = setInterval(async () => {
         try {
           const response = await simulationAPI.getStatus(simulationId);
-          setSimulation(response.data);
-          updateAvailableItems();
-        } catch (err) {
-          console.error("Failed to fetch simulation status:", err);
-        }
-      }, 1000);
+          const newData = response.data;
 
-      return () => clearInterval(interval);
+          // Use functional update to merge smoothly and prevent jumps
+          setSimulation((prev) => {
+            if (!prev) return newData;
+            // Merge updates smoothly, preserving previous state where appropriate
+            return {
+              ...prev,
+              ...newData,
+              // Preserve smooth time transitions
+              currentTime: newData.currentTime || prev.currentTime,
+            };
+          });
+
+          // Only update available items if simulation is running
+          if (newData?.status === "running") {
+            updateAvailableItems();
+          }
+        } catch (err) {
+          console.error(
+            "[SimulationPage] Failed to fetch simulation status:",
+            err
+          );
+        }
+      }, 50); // Poll every 500ms for smoother updates
+
+      return () => {
+        console.log("[SimulationPage] Clearing polling interval");
+        clearInterval(interval);
+      };
     }
-  }, [simulationId]);
+  }, [simulationId, websocketConnected]);
 
   // Load available items when simulation starts (manual mode only)
   useEffect(() => {
@@ -312,6 +370,67 @@ export default function SimulationPage() {
       alert(`Failed to move batch: ${err.message || "Unknown error"}`);
     }
   };
+
+  const handleAddSuggestedBatch = useCallback(
+    async (batch) => {
+      if (!simulationId) {
+        throw new Error("No simulation ID");
+      }
+      try {
+        // Add batch to schedule using the new add endpoint
+        const response = await simulationAPI.addBatch(simulationId, {
+          itemGuid: batch.itemGuid,
+          displayName: batch.displayName,
+          quantity: batch.quantity,
+          bakeTime: batch.bakeTime,
+          coolTime: batch.coolTime,
+          oven: batch.oven,
+          freshWindowMinutes: batch.freshWindowMinutes,
+          restockThreshold: batch.restockThreshold,
+          startTime: batch.startTime,
+        });
+        if (response.success && response.data) {
+          setSimulation((prevSimulation) => {
+            if (!prevSimulation) return prevSimulation;
+            return {
+              ...prevSimulation,
+              batches: response.data.batches || prevSimulation.batches,
+              completedBatches:
+                response.data.completedBatches ||
+                prevSimulation.completedBatches,
+              recentEvents:
+                response.data.recentEvents || prevSimulation.recentEvents,
+            };
+          });
+        }
+        return response;
+      } catch (err) {
+        console.error("Failed to add suggested batch:", err);
+        // Only show alert if not auto-adding (to avoid spam)
+        if (!autoAddSuggestedBatches) {
+          alert(
+            `Failed to add batch to schedule: ${err.message || "Unknown error"}`
+          );
+        }
+        throw err; // Re-throw so caller can handle it
+      }
+    },
+    [simulationId, autoAddSuggestedBatches]
+  );
+
+  // Memoize existing batches to prevent infinite re-renders
+  // Only recreate the array when batches actually change (by comparing IDs)
+  const memoizedExistingBatches = useMemo(() => {
+    if (!simulation) return [];
+    return [
+      ...(simulation.batches || []),
+      ...(simulation.completedBatches || []),
+    ];
+  }, [
+    // Use JSON.stringify of batch IDs for stable comparison
+    JSON.stringify((simulation?.batches || []).map((b) => b.batchId)),
+    JSON.stringify((simulation?.completedBatches || []).map((b) => b.batchId)),
+  ]);
 
   return (
     <div className="px-4 py-6 sm:px-0">
@@ -634,14 +753,61 @@ export default function SimulationPage() {
                   </p>
                 </div>
               </div>
+              {/* Connection status indicator */}
+              <div className="mt-4 pt-4 border-t border-gray-200">
+                <div className="flex items-center gap-2">
+                  <div
+                    className={`w-3 h-3 rounded-full ${
+                      websocketConnected ? "bg-green-500" : "bg-yellow-500"
+                    }`}
+                  ></div>
+                  <p className="text-xs text-gray-600">
+                    {websocketConnected
+                      ? "Real-time updates active"
+                      : "Using polling fallback (check network connection)"}
+                  </p>
+                </div>
+              </div>
             </div>
 
             {/* Statistics */}
             {simulation.stats && (
               <div className="bg-white shadow rounded-lg p-6">
-                <h3 className="text-lg font-medium text-gray-900 mb-4">
-                  Statistics
-                </h3>
+                <div className="flex justify-between items-center mb-4">
+                  <h3 className="text-lg font-medium text-gray-900">
+                    Statistics
+                  </h3>
+                  <div className="flex flex-col gap-2 items-end">
+                    <label className="flex items-center gap-2 cursor-pointer">
+                      <input
+                        type="checkbox"
+                        checked={suggestedBatchesEnabled}
+                        onChange={(e) =>
+                          setSuggestedBatchesEnabled(e.target.checked)
+                        }
+                        className="touch-input w-5 h-5"
+                      />
+                      <span className="text-sm text-gray-600">
+                        Show Suggested Batches
+                      </span>
+                    </label>
+                    {suggestedBatchesEnabled && (
+                      <label className="flex items-center gap-2 cursor-pointer">
+                        <input
+                          type="checkbox"
+                          checked={autoAddSuggestedBatches}
+                          onChange={(e) =>
+                            setAutoAddSuggestedBatches(e.target.checked)
+                          }
+                          className="touch-input w-5 h-5"
+                        />
+                        <span className="text-sm text-gray-600">
+                          Auto-Add to Schedule
+                        </span>
+                      </label>
+                    )}
+                  </div>
+                </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
                     <p className="text-sm text-gray-500">Batches Started</p>
@@ -761,6 +927,18 @@ export default function SimulationPage() {
               events={simulation.recentEvents || []}
             />
           </div>
+
+          {/* Suggested Batches Row */}
+          {suggestedBatchesEnabled && (
+            <SuggestedBatches
+              simulationId={simulationId}
+              onAddBatch={handleAddSuggestedBatch}
+              enabled={suggestedBatchesEnabled}
+              autoAdd={autoAddSuggestedBatches}
+              existingBatches={memoizedExistingBatches}
+              currentSimulationTime={simulation?.currentTime || null}
+            />
+          )}
 
           {/* Fifth Row: POS/Order Status and Recent Events Side by Side */}
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">

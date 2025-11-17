@@ -9,6 +9,8 @@ import {
   updateSimulation,
   deleteSimulationBatch,
   moveSimulationBatch,
+  addSimulationBatch,
+  calculateSuggestedBatches,
 } from "./service.js";
 
 /**
@@ -485,3 +487,100 @@ export const deleteSimulationBatchController = asyncHandler(
     });
   }
 );
+
+/**
+ * Get suggested batches for a simulation
+ * GET /api/abs/simulation/:id/suggested-batches
+ */
+export const getSuggestedBatchesController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        message: "Simulation ID is required",
+      },
+    });
+  }
+
+  const suggestedBatches = await calculateSuggestedBatches(id);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      suggestedBatches,
+    },
+  });
+});
+
+/**
+ * Add a batch to the simulation schedule
+ * POST /api/abs/simulation/:id/batch/add
+ */
+export const addSimulationBatchController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const batchData = req.body;
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        message: "Simulation ID is required",
+      },
+    });
+  }
+
+  if (!batchData || !batchData.startTime) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        message: "Batch data with startTime is required",
+      },
+    });
+  }
+
+  const simulation = await addSimulationBatch(id, batchData);
+  if (!simulation) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        message: "Simulation not found",
+      },
+    });
+  }
+
+  res.status(200).json({
+    success: true,
+    data: {
+      id: simulation.id,
+      status: simulation.status,
+      batches: simulation.batches.map((b) => ({
+        batchId: b.batchId,
+        displayName: b.displayName,
+        itemGuid: b.itemGuid,
+        quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: b.status,
+        startTime: b.startTime,
+        endTime: b.endTime,
+        availableTime: b.availableTime,
+      })),
+      completedBatches: (simulation.completedBatches || []).map((b) => ({
+        batchId: b.batchId,
+        displayName: b.displayName,
+        itemGuid: b.itemGuid,
+        quantity: b.quantity,
+        rackPosition: b.rackPosition,
+        oven: b.oven,
+        status: "completed",
+        startTime: b.startTime,
+        endTime: b.endTime,
+        availableTime: b.availableTime,
+        availableAt: b.availableAt,
+      })),
+      recentEvents: simulation.events.slice(-10),
+    },
+  });
+});

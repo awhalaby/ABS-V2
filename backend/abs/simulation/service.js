@@ -3,12 +3,13 @@ import {
   updateScheduleBatch,
   deleteScheduleBatch,
 } from "../repository.js";
+import { getBakeSpecs } from "../repository.js";
 import {
   parseTimeToMinutes,
   formatMinutesToTime,
   addMinutesToTime,
 } from "../../shared/utils/timeUtils.js";
-import { BUSINESS_HOURS } from "../../config/constants.js";
+import { BUSINESS_HOURS, OVEN_CONFIG } from "../../config/constants.js";
 import { v4 as uuidv4 } from "uuid";
 import { getOrdersByDateRange } from "../../orders/repository.js";
 import { toBusinessTime } from "../../config/timezone.js";
@@ -663,6 +664,397 @@ export function getSimulation(simulationId) {
  */
 export function getAllSimulations() {
   return Array.from(activeSimulations.values());
+}
+
+/**
+ * Calculate suggested batches based on actual vs expected orders
+ * @param {string} simulationId - Simulation ID
+ * @returns {Promise<Array>} Array of suggested batch objects
+ */
+export async function calculateSuggestedBatches(simulationId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return [];
+  }
+
+  const suggestedBatches = [];
+  const currentTime = simulation.currentTime;
+  const timeIntervalForecast = simulation.timeIntervalForecast || [];
+  // Handle both Map and Array formats for processedOrdersByItem
+  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
+  const processedOrdersMap =
+    processedOrdersRaw instanceof Map
+      ? processedOrdersRaw
+      : new Map(
+          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
+            (item) => [item.itemGuid, item]
+          )
+        );
+  const inventory = simulation.inventory || new Map();
+
+  // Get bake specs for all items
+  const bakeSpecs = await getBakeSpecs();
+  const bakeSpecMap = new Map();
+  bakeSpecs.forEach((spec) => {
+    bakeSpecMap.set(spec.itemGuid, spec);
+  });
+
+  // Group forecast by itemGuid and time interval
+  const forecastByItem = new Map();
+  timeIntervalForecast.forEach((forecast) => {
+    const itemGuid = forecast.itemGuid;
+    if (!itemGuid) return;
+
+    if (!forecastByItem.has(itemGuid)) {
+      forecastByItem.set(itemGuid, []);
+    }
+    forecastByItem.get(itemGuid).push(forecast);
+  });
+
+  // Process each item that has forecast data
+  forecastByItem.forEach((itemForecast, itemGuid) => {
+    const bakeSpec = bakeSpecMap.get(itemGuid);
+    if (!bakeSpec) return;
+
+    // Get actual orders processed so far
+    const processedItem = processedOrdersMap.get(itemGuid);
+
+    const actualQuantity = processedItem?.totalQuantity || 0;
+
+    // Calculate expected quantity up to current time
+    let expectedQuantity = 0;
+    itemForecast.forEach((forecast) => {
+      if (forecast.timeInterval <= currentTime) {
+        expectedQuantity += forecast.forecast || 0;
+      }
+    });
+
+    // Calculate remaining expected quantity for rest of day
+    let remainingExpected = 0;
+    itemForecast.forEach((forecast) => {
+      if (forecast.timeInterval > currentTime) {
+        remainingExpected += forecast.forecast || 0;
+      }
+    });
+
+    // Calculate current inventory
+    const currentInventory = inventory.get(itemGuid) || 0;
+
+    // Calculate consumption rate (actual vs expected)
+    // If we've consumed more than expected, adjust the remaining forecast
+    const consumptionRatio =
+      expectedQuantity > 0
+        ? actualQuantity / expectedQuantity
+        : actualQuantity > 0
+        ? 1.5
+        : 1.0; // If no expected but we have actual, assume 1.5x
+
+    // Projected remaining demand based on consumption rate
+    const projectedRemainingDemand =
+      remainingExpected * Math.max(1.0, consumptionRatio);
+
+    // Calculate total needed: projected remaining demand + safety buffer
+    const restockThreshold = bakeSpec.restockThreshold || 20;
+    const totalNeeded = projectedRemainingDemand + restockThreshold;
+
+    // Calculate how much inventory we'll have after current batches complete
+    // Count batches that will become available after current time
+    let futureInventory = currentInventory;
+    const allBatches = [
+      ...(simulation.batches || []),
+      ...(simulation.completedBatches || []),
+    ];
+    allBatches.forEach((batch) => {
+      if (batch.itemGuid === itemGuid && batch.availableTime) {
+        const availableTime = parseTimeToMinutes(batch.availableTime);
+        if (availableTime > currentTime && batch.status !== "available") {
+          futureInventory += batch.quantity || 0;
+        }
+      }
+    });
+
+    // Calculate shortfall
+    const shortfall = Math.max(0, totalNeeded - futureInventory);
+
+    // If we have a shortfall, suggest batches
+    if (shortfall > 0) {
+      const batchSize = bakeSpec.capacityPerRack;
+      const batchesNeeded = Math.ceil(shortfall / batchSize);
+
+      // Calculate when batches should be available (based on when we'll run out)
+      // Estimate time until we run out based on consumption rate
+      const minutesUntilShortfall =
+        remainingExpected > 0 && consumptionRatio > 0
+          ? Math.max(
+              60,
+              Math.min(
+                300,
+                remainingExpected / consumptionRatio / (consumptionRatio * 10)
+              )
+            ) // Rough estimate
+          : 120; // Default to 2 hours from now
+
+      const targetAvailableTime = currentTime + minutesUntilShortfall;
+
+      // Calculate start time (accounting for bake time + cool time)
+      const bakeTime = bakeSpec.bakeTimeMinutes;
+      const coolTime = bakeSpec.coolTimeMinutes || 0;
+      const targetStartTime = Math.max(
+        currentTime + 20, // At least 20 minutes from now
+        targetAvailableTime - bakeTime - coolTime
+      );
+
+      // Round to next 20-minute increment
+      const roundToTwentyMinuteIncrement = (minutes) => {
+        const increment = 20;
+        return Math.ceil(minutes / increment) * increment;
+      };
+      const roundedStartTime = roundToTwentyMinuteIncrement(targetStartTime);
+
+      // Create suggested batches (all at the same time)
+      for (let i = 0; i < batchesNeeded; i++) {
+        const batchStartTime = roundedStartTime; // All batches start at the same time
+
+        if (batchStartTime + bakeTime <= BUSINESS_HOURS.END_MINUTES) {
+          suggestedBatches.push({
+            batchId: `suggested-${itemGuid}-${Date.now()}-${i}`,
+            itemGuid,
+            displayName: bakeSpec.displayName || itemGuid,
+            quantity: batchSize,
+            bakeTime,
+            coolTime,
+            oven: bakeSpec.oven !== undefined ? bakeSpec.oven : null,
+            freshWindowMinutes: bakeSpec.freshWindowMinutes,
+            restockThreshold,
+            rackPosition: null, // Will be assigned when added to schedule
+            startTime: formatMinutesToTime(batchStartTime),
+            endTime: formatMinutesToTime(batchStartTime + bakeTime),
+            availableTime: formatMinutesToTime(
+              batchStartTime + bakeTime + coolTime
+            ),
+            status: "suggested",
+            reason: {
+              actualQuantity,
+              expectedQuantity,
+              currentInventory,
+              futureInventory,
+              projectedRemainingDemand,
+              shortfall,
+              consumptionRatio: Math.round(consumptionRatio * 100) / 100,
+            },
+          });
+        }
+      }
+    }
+  });
+
+  return suggestedBatches;
+}
+
+/**
+ * Add a new batch to the simulation schedule
+ * @param {string} simulationId - Simulation ID
+ * @param {Object} batchData - Batch data (from suggested batch)
+ * @returns {Promise<SimulationState|null>} Updated simulation state
+ */
+export async function addSimulationBatch(simulationId, batchData) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return null;
+  }
+
+  // Generate a new batch ID
+  const batchId = uuidv4();
+
+  // Parse start time
+  const startMinutes = parseTimeToMinutes(batchData.startTime);
+  if (
+    !startMinutes ||
+    startMinutes < BUSINESS_HOURS.START_MINUTES ||
+    startMinutes > BUSINESS_HOURS.END_MINUTES
+  ) {
+    throw new Error("Invalid start time - must be within business hours");
+  }
+
+  // Round to 20-minute increment
+  const roundToTwentyMinuteIncrement = (minutes) => {
+    const increment = 20;
+    return Math.ceil(minutes / increment) * increment;
+  };
+  const roundedStartMinutes = roundToTwentyMinuteIncrement(startMinutes);
+
+  // Find an available rack at this time
+  // Check all racks to find one that's free
+  const allBatches = [
+    ...(simulation.batches || []),
+    ...(simulation.completedBatches || []),
+  ];
+  const rackEndTimes = new Map(); // rack -> end time
+
+  // Initialize all racks
+  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+    rackEndTimes.set(rack, 0);
+  }
+
+  // Calculate when each rack becomes available
+  allBatches.forEach((batch) => {
+    if (batch.rackPosition && batch.endTime) {
+      const batchEndTime = parseTimeToMinutes(batch.endTime);
+      const rack = batch.rackPosition;
+      const currentEndTime = rackEndTimes.get(rack) || 0;
+      if (batchEndTime > currentEndTime) {
+        rackEndTimes.set(rack, batchEndTime);
+      }
+    }
+  });
+
+  // Find the first available rack at the requested time
+  let selectedRack = null;
+  let actualStartMinutes = roundedStartMinutes;
+
+  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+    const rackEndTime = rackEndTimes.get(rack) || 0;
+    const rackOven = Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+    // Check oven requirement
+    if (
+      batchData.oven !== null &&
+      batchData.oven !== undefined &&
+      batchData.oven !== rackOven
+    ) {
+      continue;
+    }
+
+    // Check if rack is available at the rounded start time
+    if (rackEndTime <= roundedStartMinutes) {
+      selectedRack = rack;
+      break;
+    }
+  }
+
+  // If no rack available at requested time, find the next available time slot
+  if (!selectedRack) {
+    let earliestAvailableTime = Infinity;
+    let earliestRack = null;
+
+    for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+      const rackEndTime = rackEndTimes.get(rack) || 0;
+      const rackOven = Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+      // Check oven requirement
+      if (
+        batchData.oven !== null &&
+        batchData.oven !== undefined &&
+        batchData.oven !== rackOven
+      ) {
+        continue;
+      }
+
+      // Find when this rack becomes available
+      const availableTime = rackEndTime;
+      if (availableTime < earliestAvailableTime) {
+        earliestAvailableTime = availableTime;
+        earliestRack = rack;
+      }
+    }
+
+    if (!earliestRack) {
+      throw new Error(
+        "No available rack found (all racks may be restricted by oven requirements)"
+      );
+    }
+
+    // Round the earliest available time to the next 20-minute increment
+    const roundToTwentyMinuteIncrement = (minutes) => {
+      const increment = 20;
+      return Math.ceil(minutes / increment) * increment;
+    };
+
+    actualStartMinutes = roundToTwentyMinuteIncrement(earliestAvailableTime);
+    selectedRack = earliestRack;
+
+    // Verify the new time doesn't exceed business hours
+    const newEndMinutes = actualStartMinutes + batchData.bakeTime;
+    if (newEndMinutes > BUSINESS_HOURS.END_MINUTES) {
+      throw new Error("No available time slot found before business hours end");
+    }
+  }
+
+  // Calculate end time based on actual start time
+  const endMinutes = actualStartMinutes + batchData.bakeTime;
+  if (endMinutes > BUSINESS_HOURS.END_MINUTES) {
+    throw new Error("Batch would end after business hours");
+  }
+
+  const selectedOven =
+    Math.floor((selectedRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+
+  // Create new batch object
+  const newBatch = {
+    batchId,
+    itemGuid: batchData.itemGuid,
+    displayName: batchData.displayName,
+    quantity: batchData.quantity,
+    bakeTime: batchData.bakeTime,
+    coolTime: batchData.coolTime || 0,
+    oven: selectedOven,
+    freshWindowMinutes: batchData.freshWindowMinutes,
+    restockThreshold: batchData.restockThreshold,
+    rackPosition: selectedRack,
+    startTime: formatMinutesToTime(actualStartMinutes),
+    endTime: formatMinutesToTime(endMinutes),
+    availableTime: formatMinutesToTime(endMinutes + (batchData.coolTime || 0)),
+    status: "scheduled",
+    startedAt: null,
+    pulledAt: null,
+    availableAt: null,
+  };
+
+  // Add batch to simulation
+  simulation.batches.push(newBatch);
+
+  // Sort batches by start time
+  simulation.batches.sort((a, b) => {
+    const timeA = parseTimeToMinutes(a.startTime);
+    const timeB = parseTimeToMinutes(b.startTime);
+    return timeA - timeB;
+  });
+
+  // Update batch in database schedule
+  if (simulation.scheduleId) {
+    try {
+      await updateScheduleBatch(simulation.scheduleId, batchId, newBatch);
+    } catch (error) {
+      console.error("Failed to add batch to database:", error);
+      simulation.addEvent(
+        "batch_add_error",
+        `Failed to save batch to database: ${error.message}`,
+        { batchId, error: error.message }
+      );
+    }
+  }
+
+  // Log event with note if time was adjusted
+  const timeAdjusted = actualStartMinutes !== roundedStartMinutes;
+  simulation.addEvent(
+    "batch_added",
+    `Batch added: ${
+      newBatch.displayName || newBatch.itemGuid
+    } to Rack ${selectedRack} at ${newBatch.startTime}${
+      timeAdjusted
+        ? " (time adjusted - no rack available at requested time)"
+        : ""
+    }`,
+    {
+      batchId: newBatch.batchId,
+      rack: selectedRack,
+      startTime: newBatch.startTime,
+      requestedTime: formatMinutesToTime(roundedStartMinutes),
+      timeAdjusted,
+    }
+  );
+
+  return simulation;
 }
 
 /**

@@ -9,6 +9,8 @@ import {
   getAvailableDatesController,
   deleteSimulationBatchController,
   moveSimulationBatchController,
+  addSimulationBatchController,
+  getSuggestedBatchesController,
 } from "./controller.js";
 import {
   purchaseItemsController,
@@ -54,5 +56,11 @@ router.delete("/:id/batch/:batchId", deleteSimulationBatchController);
 
 // POST /api/abs/simulation/:id/batch/move - Move a batch
 router.post("/:id/batch/move", moveSimulationBatchController);
+
+// POST /api/abs/simulation/:id/batch/add - Add a new batch
+router.post("/:id/batch/add", addSimulationBatchController);
+
+// GET /api/abs/simulation/:id/suggested-batches - Get suggested batches
+router.get("/:id/suggested-batches", getSuggestedBatchesController);
 
 export default router;

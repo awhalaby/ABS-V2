@@ -171,4 +171,8 @@ export const simulationAPI = {
       newStartTime,
       newRack,
     }),
+  addBatch: (id, batchData) =>
+    api.post(`/api/abs/simulation/${id}/batch/add`, batchData),
+  getSuggestedBatches: (id) =>
+    api.get(`/api/abs/simulation/${id}/suggested-batches`),
 };
