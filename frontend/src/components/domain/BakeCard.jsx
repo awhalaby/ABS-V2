@@ -75,7 +75,7 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
 
   return (
     <div
-      className={`bake-card touch-card absolute border-2 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer ${statusColor} ${cateringStyle} ${className}`}
+      className={`bake-card touch-card absolute border-2 rounded-lg shadow-md hover:shadow-lg transition-all cursor-pointer overflow-hidden ${statusColor} ${cateringStyle} ${className}`}
       style={style}
       onPointerDown={handlePointerDown}
       onPointerUp={handlePointerUp}
@@ -92,7 +92,7 @@ export default function BakeCard({ batch, onClick, style, className = "" }) {
         {isCatering && "🍽️ "}
         {displayName || itemGuid}
       </div>
-      <div className="text-white text-xs space-y-1">
+      <div className="text-white text-xs space-y-1 leading-tight">
         {quantity && (
           <div className="flex items-center justify-between">
             <span className="opacity-90">Qty:</span>

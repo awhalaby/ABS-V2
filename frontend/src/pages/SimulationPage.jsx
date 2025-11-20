@@ -15,6 +15,24 @@ import SuggestedBatches from "../components/domain/SuggestedBatches.jsx";
 import CateringOrderForm from "../components/domain/CateringOrderForm.jsx";
 import CateringOrdersList from "../components/domain/CateringOrdersList.jsx";
 
+const DEFAULT_FORECAST_SCALES = {
+  morning: 100,
+  afternoon: 100,
+  evening: 100,
+};
+
+const QUICK_SPEED_OPTIONS = [1, 30, 60, 120, 300, 600, 1200, 2400];
+
+const SECTION_ANCHORS = [
+  { id: "simulation-status", label: "Status" },
+  { id: "simulation-timeline", label: "Timeline" },
+  { id: "simulation-orders", label: "Orders" },
+  { id: "simulation-inventory", label: "Inventory" },
+  { id: "simulation-suggestions", label: "Suggestions" },
+  { id: "simulation-operations", label: "Operations" },
+  { id: "simulation-batches", label: "Batches" },
+];
+
 export default function SimulationPage() {
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState(null);
@@ -28,9 +46,7 @@ export default function SimulationPage() {
   const [simulation, setSimulation] = useState(null);
   const [speedMultiplier, setSpeedMultiplier] = useState(60);
   const [forecastScales, setForecastScales] = useState({
-    morning: 100, // 06:00-11:00
-    afternoon: 100, // 11:00-14:00
-    evening: 100, // 14:00-17:00
+    ...DEFAULT_FORECAST_SCALES,
   });
   const [availableItems, setAvailableItems] = useState([]);
   const [purchasing, setPurchasing] = useState(false);
@@ -42,6 +58,70 @@ export default function SimulationPage() {
   const [websocketConnected, setWebsocketConnected] = useState(false);
   const isMovingBatchRef = useRef(false);
   const socketRef = useRef(null);
+  const simulationActive = Boolean(simulation);
+
+  const handleScrollToSection = useCallback((sectionId) => {
+    const target = document.getElementById(sectionId);
+    if (target) {
+      target.scrollIntoView({ behavior: "smooth", block: "start" });
+    }
+  }, []);
+
+  const handleResetForecastScales = () => {
+    setForecastScales({ ...DEFAULT_FORECAST_SCALES });
+  };
+
+  const handleSpeedPresetSelect = (value) => {
+    setSpeedMultiplier(value);
+  };
+
+  const isForecastScaleDefault = useMemo(() => {
+    return (
+      forecastScales.morning === DEFAULT_FORECAST_SCALES.morning &&
+      forecastScales.afternoon === DEFAULT_FORECAST_SCALES.afternoon &&
+      forecastScales.evening === DEFAULT_FORECAST_SCALES.evening
+    );
+  }, [forecastScales]);
+
+  const getStatusBadgeClass = (status = "idle") => {
+    switch (status) {
+      case "running":
+        return "bg-green-100 text-green-800 border-green-200";
+      case "paused":
+        return "bg-yellow-100 text-yellow-800 border-yellow-200";
+      case "stopped":
+      case "completed":
+        return "bg-gray-100 text-gray-800 border-gray-200";
+      default:
+        return "bg-blue-100 text-blue-800 border-blue-200";
+    }
+  };
+
+  const toolbarMetrics = useMemo(() => {
+    if (!simulationActive) return [];
+    return [
+      {
+        label: "Mode",
+        value: simulation?.mode === "manual" ? "Manual" : "Preset",
+      },
+      {
+        label: "Schedule",
+        value: simulation?.scheduleDate || scheduleDate,
+      },
+      {
+        label: "Time",
+        value: simulation?.currentTime || "--:--",
+      },
+      {
+        label: "Speed",
+        value: `${simulation?.speedMultiplier || speedMultiplier}x`,
+      },
+      {
+        label: "Inventory",
+        value: formatNumber(simulation?.stats?.totalInventory || 0),
+      },
+    ];
+  }, [simulationActive, simulation, scheduleDate, speedMultiplier]);
 
   // Update available items function - memoized to prevent infinite loops
   const updateAvailableItems = useCallback(async () => {
@@ -507,6 +587,76 @@ export default function SimulationPage() {
         />
       )}
 
+      {simulation && (
+        <div className="sticky top-0 z-30 mb-6 -mx-4 sm:mx-0">
+          <div className="bg-white/95 backdrop-blur border border-gray-200 shadow-sm sm:rounded-lg px-4 py-3 flex flex-col gap-3 lg:flex-row lg:items-center lg:justify-between">
+            <div className="flex flex-col gap-2">
+              <div className="flex flex-wrap items-center gap-3">
+                <span
+                  className={`px-2 py-1 text-xs font-semibold rounded-full border ${getStatusBadgeClass(
+                    simulation?.status
+                  )}`}
+                >
+                  {simulation?.status ? simulation.status : "Idle"}
+                </span>
+                <div className="flex items-center gap-2 text-sm text-gray-600">
+                  <span
+                    className={`w-2.5 h-2.5 rounded-full ${
+                      websocketConnected ? "bg-green-500" : "bg-yellow-500"
+                    }`}
+                  ></span>
+                  <span>
+                    {websocketConnected ? "Live updates" : "Polling fallback"}
+                  </span>
+                </div>
+              </div>
+              <div className="flex flex-wrap gap-4 text-sm text-gray-600">
+                {toolbarMetrics.map((metric) => (
+                  <div key={metric.label} className="flex flex-col">
+                    <span className="text-[10px] uppercase tracking-wide text-gray-500">
+                      {metric.label}
+                    </span>
+                    <span className="font-semibold text-gray-900">
+                      {metric.value}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            </div>
+            <div className="flex flex-wrap gap-2 justify-end">
+              {simulation?.status === "running" && (
+                <button
+                  onClick={handlePause}
+                  className="px-3 py-2 text-sm font-medium rounded-md bg-yellow-600 text-white hover:bg-yellow-700 shadow"
+                >
+                  Pause
+                </button>
+              )}
+              {simulation?.status === "paused" && (
+                <button
+                  onClick={handleResume}
+                  className="px-3 py-2 text-sm font-medium rounded-md bg-green-600 text-white hover:bg-green-700 shadow"
+                >
+                  Resume
+                </button>
+              )}
+              <button
+                onClick={handleStop}
+                className="px-3 py-2 text-sm font-medium rounded-md bg-red-600 text-white hover:bg-red-700 shadow"
+              >
+                Stop
+              </button>
+              <button
+                onClick={handleReset}
+                className="px-3 py-2 text-sm font-medium rounded-md bg-gray-600 text-white hover:bg-gray-700 shadow"
+              >
+                Reset
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Simulation Controls */}
       <div className="bg-white shadow rounded-lg p-6 mb-6">
         <h3 className="text-lg font-medium text-gray-900 mb-4">
@@ -602,11 +752,41 @@ export default function SimulationPage() {
 
                 <span>2400x</span>
               </div>
+              <div className="flex flex-wrap gap-2 mt-3">
+                {QUICK_SPEED_OPTIONS.map((option) => (
+                  <button
+                    key={option}
+                    type="button"
+                    onClick={() => handleSpeedPresetSelect(option)}
+                    className={`px-3 py-1 text-xs rounded-full border transition ${
+                      speedMultiplier === option
+                        ? "bg-blue-50 text-blue-700 border-blue-400"
+                        : "text-gray-600 border-gray-200 hover:border-gray-300"
+                    }`}
+                  >
+                    {option}x
+                  </button>
+                ))}
+              </div>
             </div>
             <div>
-              <label className="block text-base font-medium text-gray-700 mb-4">
-                Forecast Scale by Period
-              </label>
+              <div className="flex items-center justify-between gap-2 mb-2">
+                <label className="block text-base font-medium text-gray-700">
+                  Forecast Scale by Period
+                </label>
+                <button
+                  type="button"
+                  onClick={handleResetForecastScales}
+                  disabled={isForecastScaleDefault}
+                  className={`text-sm font-medium ${
+                    isForecastScaleDefault
+                      ? "text-gray-400 cursor-not-allowed"
+                      : "text-blue-600 hover:text-blue-800"
+                  }`}
+                >
+                  Reset to 100%
+                </button>
+              </div>
               <div className="grid grid-cols-3 gap-6">
                 {/* Morning Slider */}
                 <div className="flex flex-col items-center">
@@ -739,44 +919,40 @@ export default function SimulationPage() {
             </button>
           </div>
         ) : (
-          <div className="flex gap-3 w-full">
-            {simulation?.status === "running" && (
-              <button
-                onClick={handlePause}
-                className="touch-button flex-1 bg-yellow-600 text-white rounded-lg hover:bg-yellow-700 shadow-md active:shadow-sm"
-              >
-                Pause
-              </button>
-            )}
-            {simulation?.status === "paused" && (
-              <button
-                onClick={handleResume}
-                className="touch-button flex-1 bg-green-600 text-white rounded-lg hover:bg-green-700 shadow-md active:shadow-sm"
-              >
-                Resume
-              </button>
-            )}
-            <button
-              onClick={handleStop}
-              className="touch-button flex-1 bg-red-600 text-white rounded-lg hover:bg-red-700 shadow-md active:shadow-sm"
-            >
-              Stop
-            </button>
-            <button
-              onClick={handleReset}
-              className="touch-button flex-1 bg-gray-600 text-white rounded-lg hover:bg-gray-700 shadow-md active:shadow-sm"
-            >
-              Reset
-            </button>
+          <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-900">
+            Simulation running. Use the sticky toolbar at the top of the page to
+            pause, resume, stop, or reset without losing your place.
           </div>
         )}
       </div>
+
+      {simulation && (
+        <nav
+          className="bg-white border border-gray-200 rounded-lg p-4 mb-6 flex flex-wrap items-center gap-2"
+          aria-label="Simulation sections"
+        >
+          <span className="text-sm font-semibold text-gray-500">Jump to:</span>
+          {SECTION_ANCHORS.map((anchor) => (
+            <button
+              key={anchor.id}
+              type="button"
+              onClick={() => handleScrollToSection(anchor.id)}
+              className="px-3 py-1 text-sm rounded-full border border-gray-200 text-gray-700 hover:border-blue-300 hover:text-blue-700 focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-1"
+            >
+              {anchor.label}
+            </button>
+          ))}
+        </nav>
+      )}
 
       {/* Simulation Status */}
       {simulation && (
         <div className="space-y-6">
           {/* Top Row: Status and Statistics Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div
+            id="simulation-status"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+          >
             {/* Current Status */}
             <div className="bg-white shadow rounded-lg p-6">
               <h3 className="text-lg font-medium text-gray-900 mb-4">
@@ -912,7 +1088,10 @@ export default function SimulationPage() {
           {((simulation.batches && simulation.batches.length > 0) ||
             (simulation.completedBatches &&
               simulation.completedBatches.length > 0)) && (
-            <div className="bg-white shadow rounded-lg p-6">
+            <div
+              id="simulation-timeline"
+              className="bg-white shadow rounded-lg p-6"
+            >
               <h3 className="text-lg font-medium text-gray-900 mb-4">
                 Batches Timeline
               </h3>
@@ -932,14 +1111,18 @@ export default function SimulationPage() {
                 options={{
                   hourInterval: 1,
                   minutesPerPixel: 0.3,
-                  rackHeight: 140,
+                  rackHeight: 100,
+                  autoHeight: true,
                 }}
               />
             </div>
           )}
 
           {/* Second Row: Planned and Actual Orders Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div
+            id="simulation-orders"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+          >
             {/* Planned Items from Scheduled Batches */}
             {((simulation.batches && simulation.batches.length > 0) ||
               (simulation.completedBatches &&
@@ -957,7 +1140,10 @@ export default function SimulationPage() {
           </div>
 
           {/* Third Row: Visual Inventory and Stockouts Side by Side */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div
+            id="simulation-inventory"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+          >
             {/* Visual Inventory */}
             {simulation.inventory &&
               (Object.keys(simulation.inventory).length > 0 ||
@@ -985,18 +1171,23 @@ export default function SimulationPage() {
 
           {/* Suggested Batches Row */}
           {suggestedBatchesEnabled && (
-            <SuggestedBatches
-              simulationId={simulationId}
-              onAddBatch={handleAddSuggestedBatch}
-              enabled={suggestedBatchesEnabled}
-              autoAdd={autoAddSuggestedBatches}
-              existingBatches={memoizedExistingBatches}
-              currentSimulationTime={simulation?.currentTime || null}
-            />
+            <div id="simulation-suggestions">
+              <SuggestedBatches
+                simulationId={simulationId}
+                onAddBatch={handleAddSuggestedBatch}
+                enabled={suggestedBatchesEnabled}
+                autoAdd={autoAddSuggestedBatches}
+                existingBatches={memoizedExistingBatches}
+                currentSimulationTime={simulation?.currentTime || null}
+              />
+            </div>
           )}
 
           {/* Catering Orders Section */}
-          <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
+          <div
+            id="simulation-operations"
+            className="grid grid-cols-1 lg:grid-cols-2 gap-6"
+          >
             {/* Catering Order Form */}
             <CateringOrderForm
               simulationId={simulationId}
@@ -1184,6 +1375,7 @@ export default function SimulationPage() {
             (simulation.completedBatches &&
               simulation.completedBatches.length > 0)) && (
             <div
+              id="simulation-batches"
               className="bg-white shadow rounded-lg p-6 flex flex-col"
               style={{ minHeight: "500px", maxHeight: "500px" }}
             >

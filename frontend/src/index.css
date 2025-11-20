@@ -136,7 +136,9 @@ code {
   /* Vertical slider specific styles */
   .touch-slider.vertical-slider {
     writing-mode: vertical-lr;
-    -webkit-appearance: slider-vertical;
+    direction: rtl;
+    -webkit-appearance: none;
+    appearance: none;
   }
 
   .touch-slider.vertical-slider::-webkit-slider-runnable-track {

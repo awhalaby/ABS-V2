@@ -1,4 +1,4 @@
-import { useState, useEffect } from "react";
+import { Fragment, useEffect, useMemo, useState } from "react";
 import { inventoryAPI } from "../utils/api.js";
 import { formatNumber } from "../utils/formatters.js";
 import LoadingSpinner from "../components/common/LoadingSpinner.jsx";
@@ -13,6 +13,141 @@ export default function InventoryPage() {
   const [editingItem, setEditingItem] = useState(null);
   const [editQuantity, setEditQuantity] = useState("");
   const [editRestockThreshold, setEditRestockThreshold] = useState("");
+  const [searchTerm, setSearchTerm] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+  const [sortConfig, setSortConfig] = useState({ key: null, direction: "asc" });
+  const [savingItem, setSavingItem] = useState(null);
+  const [inlineError, setInlineError] = useState("");
+  const statusFilterOptions = [
+    { value: "all", label: "All" },
+    { value: "low", label: "Low Stock" },
+    { value: "reorder_soon", label: "Reorder Soon" },
+    { value: "ok", label: "OK" },
+    { value: "no_inventory", label: "No Inventory" },
+  ];
+
+  const summaryData = useMemo(() => {
+    if (!inventory.length) {
+      return {
+        criticalCount: 0,
+        reorderSoonCount: 0,
+        suggestedUnits: 0,
+        avgDaysUntilRestock: null,
+      };
+    }
+
+    const totals = inventory.reduce(
+      (acc, item) => {
+        if (item.status === "low" || item.status === "no_inventory") {
+          acc.criticalCount += 1;
+        }
+        if (item.status === "reorder_soon") {
+          acc.reorderSoonCount += 1;
+        }
+        acc.suggestedUnits += item.suggestedOrderQuantity || 0;
+
+        if (
+          typeof item.daysUntilRestock === "number" &&
+          item.daysUntilRestock >= 0
+        ) {
+          acc.daysUntilRestockValues.push(item.daysUntilRestock);
+        }
+
+        return acc;
+      },
+      {
+        criticalCount: 0,
+        reorderSoonCount: 0,
+        suggestedUnits: 0,
+        daysUntilRestockValues: [],
+      }
+    );
+
+    const avgDaysUntilRestock =
+      totals.daysUntilRestockValues.length > 0
+        ? (
+            totals.daysUntilRestockValues.reduce(
+              (sum, value) => sum + value,
+              0
+            ) / totals.daysUntilRestockValues.length
+          ).toFixed(1)
+        : null;
+
+    return {
+      criticalCount: totals.criticalCount,
+      reorderSoonCount: totals.reorderSoonCount,
+      suggestedUnits: totals.suggestedUnits,
+      avgDaysUntilRestock,
+    };
+  }, [inventory]);
+
+  const filteredInventory = useMemo(() => {
+    const normalizedSearch = searchTerm.trim().toLowerCase();
+
+    return inventory.filter((item) => {
+      const matchesSearch =
+        !normalizedSearch ||
+        item.displayName?.toLowerCase().includes(normalizedSearch) ||
+        item.itemGuid?.toLowerCase().includes(normalizedSearch);
+
+      const matchesStatus =
+        statusFilter === "all" ? true : item.status === statusFilter;
+
+      return matchesSearch && matchesStatus;
+    });
+  }, [inventory, searchTerm, statusFilter]);
+
+  const sortedInventory = useMemo(() => {
+    if (!sortConfig?.key) {
+      return filteredInventory;
+    }
+
+    const sorted = [...filteredInventory].sort((a, b) => {
+      const aValue = a[sortConfig.key];
+      const bValue = b[sortConfig.key];
+
+      if (aValue === undefined || aValue === null) return 1;
+      if (bValue === undefined || bValue === null) return -1;
+
+      if (typeof aValue === "number" && typeof bValue === "number") {
+        return aValue - bValue;
+      }
+
+      return aValue.toString().localeCompare(bValue.toString());
+    });
+
+    return sortConfig.direction === "asc" ? sorted : sorted.reverse();
+  }, [filteredInventory, sortConfig]);
+
+  const noInventoryRecords = inventory.length === 0;
+  const noFilteredResults = !noInventoryRecords && sortedInventory.length === 0;
+
+  const handleSort = (key) => {
+    setSortConfig((current) => {
+      if (current?.key === key) {
+        return {
+          key,
+          direction: current.direction === "asc" ? "desc" : "asc",
+        };
+      }
+
+      return { key, direction: "asc" };
+    });
+  };
+
+  const getSortLabel = (key) => {
+    if (sortConfig?.key !== key) return "";
+    return sortConfig.direction === "asc" ? "(asc)" : "(desc)";
+  };
+
+  const handleResetFilters = () => {
+    setSearchTerm("");
+    setStatusFilter("all");
+    setSortConfig({ key: null, direction: "asc" });
+  };
+
+  const hasActiveFilters =
+    statusFilter !== "all" || searchTerm.trim() !== "" || sortConfig.key;
 
   useEffect(() => {
     loadInventory();
@@ -39,12 +174,14 @@ export default function InventoryPage() {
         ? item.restockThreshold.toString()
         : ""
     );
+    setInlineError("");
   };
 
   const handleSave = async (itemGuid) => {
+    setInlineError("");
     const quantity = parseInt(editQuantity, 10);
     if (isNaN(quantity) || quantity < 0) {
-      setError("Quantity must be a non-negative number");
+      setInlineError("Quantity must be a non-negative number");
       return;
     }
 
@@ -54,19 +191,25 @@ export default function InventoryPage() {
       editRestockThreshold !== "" &&
       (isNaN(restockThreshold) || restockThreshold < 0)
     ) {
-      setError("Restock threshold must be a non-negative number");
+      setInlineError("Restock threshold must be a non-negative number");
       return;
     }
 
     try {
+      setSavingItem(itemGuid);
       await inventoryAPI.update(itemGuid, quantity, null, restockThreshold);
       await loadInventory();
       setEditingItem(null);
       setEditQuantity("");
       setEditRestockThreshold("");
       setError(null);
+      setInlineError("");
     } catch (err) {
-      setError(err.message || "Failed to update inventory");
+      const message = err.message || "Failed to update inventory";
+      setInlineError(message);
+      setError(message);
+    } finally {
+      setSavingItem(null);
     }
   };
 
@@ -74,6 +217,7 @@ export default function InventoryPage() {
     setEditingItem(null);
     setEditQuantity("");
     setEditRestockThreshold("");
+    setInlineError("");
   };
 
   const getStatusColor = (status) => {
@@ -106,6 +250,47 @@ export default function InventoryPage() {
     }
   };
 
+  const formatRelativeTime = (dateString) => {
+    if (!dateString) return "Never";
+    const date = new Date(dateString);
+    const diffMs = Date.now() - date.getTime();
+
+    if (diffMs < 0) {
+      return "Upcoming";
+    }
+
+    const diffMinutes = Math.floor(diffMs / 60000);
+
+    if (diffMinutes < 1) {
+      return "Just now";
+    }
+
+    if (diffMinutes < 60) {
+      return `${diffMinutes} min ago`;
+    }
+
+    const diffHours = Math.floor(diffMinutes / 60);
+
+    if (diffHours < 24) {
+      return `${diffHours} hr${diffHours === 1 ? "" : "s"} ago`;
+    }
+
+    const diffDays = Math.floor(diffHours / 24);
+
+    if (diffDays < 30) {
+      return `${diffDays} day${diffDays === 1 ? "" : "s"} ago`;
+    }
+
+    const diffMonths = Math.floor(diffDays / 30);
+
+    if (diffMonths < 12) {
+      return `${diffMonths} mo${diffMonths === 1 ? "" : "s"} ago`;
+    }
+
+    const diffYears = Math.floor(diffMonths / 12);
+    return `${diffYears} yr${diffYears === 1 ? "" : "s"} ago`;
+  };
+
   const formatDate = (dateString) => {
     if (!dateString) return "Never";
     const date = new Date(dateString);
@@ -126,6 +311,45 @@ export default function InventoryPage() {
           Track current inventory levels and get restock suggestions based on
           consumption patterns.
         </p>
+      </div>
+
+      <div className="mb-6 grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <p className="text-sm text-gray-500">Critical Items</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">
+            {summaryData.criticalCount}
+          </p>
+          <p className="text-xs text-red-600">
+            Needs immediate restock attention
+          </p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <p className="text-sm text-gray-500">Reorder Soon</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">
+            {summaryData.reorderSoonCount}
+          </p>
+          <p className="text-xs text-yellow-600">
+            Plan purchases within lead time
+          </p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <p className="text-sm text-gray-500">Suggested Units</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">
+            {formatNumber(summaryData.suggestedUnits)}
+          </p>
+          <p className="text-xs text-gray-500">
+            Total recommended to order now
+          </p>
+        </div>
+        <div className="bg-white border border-gray-200 rounded-lg p-4">
+          <p className="text-sm text-gray-500">Avg Days Until Restock</p>
+          <p className="mt-1 text-2xl font-semibold text-gray-900">
+            {summaryData.avgDaysUntilRestock || "--"}
+          </p>
+          <p className="text-xs text-gray-500">
+            Based on recent consumption trends
+          </p>
+        </div>
       </div>
 
       {/* Settings */}
@@ -166,6 +390,50 @@ export default function InventoryPage() {
         </div>
       </div>
 
+      {/* Filters */}
+      <div className="bg-white p-4 rounded-lg border border-gray-200 mb-6">
+        <div className="flex flex-col gap-4 lg:flex-row lg:items-end">
+          <div className="flex-1">
+            <label className="block text-sm font-medium text-gray-700 mb-1">
+              Search inventory
+            </label>
+            <input
+              type="search"
+              value={searchTerm}
+              onChange={(e) => setSearchTerm(e.target.value)}
+              placeholder="Search by item name or ID"
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+            />
+          </div>
+          <div className="flex flex-wrap gap-2">
+            {statusFilterOptions.map((option) => (
+              <button
+                key={option.value}
+                type="button"
+                className={`px-3 py-1 text-sm rounded-full border transition ${
+                  statusFilter === option.value
+                    ? "bg-blue-50 text-blue-700 border-blue-400"
+                    : "text-gray-600 border-gray-200 hover:border-gray-300"
+                }`}
+                aria-pressed={statusFilter === option.value}
+                onClick={() => setStatusFilter(option.value)}
+              >
+                {option.label}
+              </button>
+            ))}
+          </div>
+          {hasActiveFilters && (
+            <button
+              type="button"
+              onClick={handleResetFilters}
+              className="text-sm text-blue-600 hover:text-blue-800"
+            >
+              Reset filters
+            </button>
+          )}
+        </div>
+      </div>
+
       {error && (
         <ErrorMessage
           error={error}
@@ -186,33 +454,99 @@ export default function InventoryPage() {
                     <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Item
                     </th>
-                    <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Current Qty
+                    <th className="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("currentQuantity")}
+                        className="inline-flex items-center gap-1 w-full justify-end"
+                      >
+                        <span>Current Qty</span>
+                        {getSortLabel("currentQuantity") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("currentQuantity")}
+                          </span>
+                        )}
+                      </button>
                     </th>
-                    <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Restock Threshold
+                    <th className="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("restockThreshold")}
+                        className="inline-flex items-center gap-1 w-full justify-end"
+                      >
+                        <span>Restock Threshold</span>
+                        {getSortLabel("restockThreshold") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("restockThreshold")}
+                          </span>
+                        )}
+                      </button>
                     </th>
-                    <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Daily Consumption
+                    <th className="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("dailyConsumption")}
+                        className="inline-flex items-center gap-1 w-full justify-end"
+                      >
+                        <span>Daily Consumption</span>
+                        {getSortLabel("dailyConsumption") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("dailyConsumption")}
+                          </span>
+                        )}
+                      </button>
                     </th>
-                    <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Days Until Restock
+                    <th className="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("daysUntilRestock")}
+                        className="inline-flex items-center gap-1 w-full justify-end"
+                      >
+                        <span>Days Until Restock</span>
+                        {getSortLabel("daysUntilRestock") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("daysUntilRestock")}
+                          </span>
+                        )}
+                      </button>
                     </th>
-                    <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Suggested Order
+                    <th className="px-2 py-2 text-right text-xs font-medium text-gray-500 uppercase tracking-wider">
+                      <button
+                        type="button"
+                        onClick={() => handleSort("suggestedOrderQuantity")}
+                        className="inline-flex items-center gap-1 w-full justify-end"
+                      >
+                        <span>Suggested Order</span>
+                        {getSortLabel("suggestedOrderQuantity") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("suggestedOrderQuantity")}
+                          </span>
+                        )}
+                      </button>
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
                       Status
                     </th>
                     <th className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider">
-                      Last Updated
+                      <button
+                        type="button"
+                        onClick={() => handleSort("lastUpdated")}
+                        className="inline-flex items-center gap-1"
+                      >
+                        <span>Last Updated</span>
+                        {getSortLabel("lastUpdated") && (
+                          <span className="text-[10px] text-gray-400">
+                            {getSortLabel("lastUpdated")}
+                          </span>
+                        )}
+                      </button>
                     </th>
                     <th
                       className="px-2 py-2 text-left text-xs font-medium text-gray-500 uppercase tracking-wider sticky right-0 bg-gray-50 z-20 border-l border-gray-200"
                       style={{
-                        width: "100px",
-                        minWidth: "100px",
-                        maxWidth: "100px",
+                        width: "150px",
+                        minWidth: "150px",
+                        maxWidth: "150px",
                       }}
                     >
                       Actions
@@ -228,7 +562,7 @@ export default function InventoryPage() {
                   </tr>
                 </thead>
                 <tbody className="bg-white divide-y divide-gray-200">
-                  {inventory.length === 0 ? (
+                  {noInventoryRecords ? (
                     <tr>
                       <td
                         colSpan="10"
@@ -238,122 +572,197 @@ export default function InventoryPage() {
                         started.
                       </td>
                     </tr>
-                  ) : (
-                    inventory.map((item) => (
-                      <tr key={item.itemGuid} className="hover:bg-gray-50">
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <div className="text-sm font-medium text-gray-900">
-                            {item.displayName}
-                          </div>
-                          <div className="text-xs text-gray-500">
-                            {item.itemGuid}
-                          </div>
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          {editingItem === item.itemGuid ? (
-                            <input
-                              type="number"
-                              min="0"
-                              value={editQuantity}
-                              onChange={(e) => setEditQuantity(e.target.value)}
-                              className="w-16 px-1 py-1 border border-gray-300 rounded text-sm"
-                              autoFocus
-                            />
-                          ) : (
-                            <span className="text-sm text-gray-900">
-                              {formatNumber(item.currentQuantity)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          {editingItem === item.itemGuid ? (
-                            <input
-                              type="number"
-                              min="0"
-                              value={editRestockThreshold}
-                              onChange={(e) =>
-                                setEditRestockThreshold(e.target.value)
-                              }
-                              placeholder="Auto"
-                              className="w-16 px-1 py-1 border border-gray-300 rounded text-sm"
-                            />
-                          ) : (
-                            <span className="text-sm text-gray-500">
-                              {formatNumber(item.restockThreshold)}
-                            </span>
-                          )}
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">
-                          {item.dailyConsumption > 0
-                            ? formatNumber(item.dailyConsumption)
-                            : "N/A"}
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">
-                          {item.daysUntilRestock !== null
-                            ? `${item.daysUntilRestock} days`
-                            : "N/A"}
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <span className="text-sm font-medium text-blue-600">
-                            {formatNumber(item.suggestedOrderQuantity)}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap">
-                          <span
-                            className={`px-1.5 py-0.5 inline-flex text-xs leading-4 font-semibold rounded-full border ${getStatusColor(
-                              item.status
-                            )}`}
-                          >
-                            {getStatusLabel(item.status)}
-                          </span>
-                        </td>
-                        <td className="px-2 py-2 whitespace-nowrap text-sm text-gray-500">
-                          {formatDate(item.lastUpdated)}
-                        </td>
-                        <td
-                          className="px-2 py-2 text-sm font-medium sticky right-0 bg-white z-20 overflow-hidden border-l border-gray-200"
-                          style={{
-                            width: "100px",
-                            minWidth: "100px",
-                            maxWidth: "100px",
-                          }}
+                  ) : noFilteredResults ? (
+                    <tr>
+                      <td
+                        colSpan="10"
+                        className="px-6 py-4 text-center text-gray-500"
+                      >
+                        No items match your filters.{" "}
+                        <button
+                          type="button"
+                          onClick={handleResetFilters}
+                          className="text-blue-600 hover:text-blue-800 underline"
                         >
-                          <div className="flex gap-1 items-center justify-start min-h-[1.5rem] overflow-hidden">
-                            {editingItem === item.itemGuid ? (
-                              <>
-                                <button
-                                  onClick={() => handleSave(item.itemGuid)}
-                                  className="text-blue-600 hover:text-blue-900 text-xs px-1 flex-shrink-0"
-                                >
-                                  Save
-                                </button>
-                                <button
-                                  onClick={handleCancel}
-                                  className="text-gray-600 hover:text-gray-900 text-xs px-1 flex-shrink-0"
-                                >
-                                  Cancel
-                                </button>
-                              </>
-                            ) : (
-                              <button
-                                onClick={() => handleEdit(item)}
-                                className="text-blue-600 hover:text-blue-900 text-xs px-1 flex-shrink-0"
+                          Clear filters
+                        </button>{" "}
+                        to show all inventory.
+                      </td>
+                    </tr>
+                  ) : (
+                    sortedInventory.map((item) => {
+                      const isEditing = editingItem === item.itemGuid;
+                      const parsedQuantity = isEditing
+                        ? parseInt(editQuantity, 10)
+                        : null;
+                      const parsedRestock =
+                        isEditing && editRestockThreshold !== ""
+                          ? parseInt(editRestockThreshold, 10)
+                          : null;
+                      const saveDisabled =
+                        !isEditing ||
+                        savingItem === item.itemGuid ||
+                        editQuantity === "" ||
+                        parsedQuantity === null ||
+                        Number.isNaN(parsedQuantity) ||
+                        parsedQuantity < 0 ||
+                        (editRestockThreshold !== "" &&
+                          (parsedRestock === null ||
+                            Number.isNaN(parsedRestock) ||
+                            parsedRestock < 0));
+                      const lastUpdatedRelative = formatRelativeTime(
+                        item.lastUpdated
+                      );
+                      const lastUpdatedExact = formatDate(item.lastUpdated);
+
+                      return (
+                        <Fragment key={item.itemGuid}>
+                          <tr className="hover:bg-gray-50">
+                            <td className="px-2 py-3 whitespace-nowrap">
+                              <div className="text-sm font-medium text-gray-900">
+                                {item.displayName}
+                              </div>
+                              <div
+                                className="text-xs text-gray-500 truncate"
+                                title={item.itemGuid}
                               >
-                                Edit
-                              </button>
-                            )}
-                          </div>
-                        </td>
-                        <td
-                          className="px-2 py-2 bg-white"
-                          style={{
-                            width: "20px",
-                            minWidth: "20px",
-                            maxWidth: "20px",
-                          }}
-                        ></td>
-                      </tr>
-                    ))
+                                {item.itemGuid}
+                              </div>
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-right">
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={editQuantity}
+                                  onChange={(e) =>
+                                    setEditQuantity(e.target.value)
+                                  }
+                                  className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-right"
+                                  autoFocus
+                                />
+                              ) : (
+                                <span className="text-sm text-gray-900">
+                                  {formatNumber(item.currentQuantity)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-right">
+                              {isEditing ? (
+                                <input
+                                  type="number"
+                                  min="0"
+                                  value={editRestockThreshold}
+                                  onChange={(e) =>
+                                    setEditRestockThreshold(e.target.value)
+                                  }
+                                  placeholder="Auto"
+                                  className="w-20 px-2 py-1 border border-gray-300 rounded text-sm text-right"
+                                />
+                              ) : (
+                                <span className="text-sm text-gray-500">
+                                  {formatNumber(item.restockThreshold)}
+                                </span>
+                              )}
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-right text-sm text-gray-600">
+                              {item.dailyConsumption > 0
+                                ? formatNumber(item.dailyConsumption)
+                                : "N/A"}
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-right text-sm text-gray-600">
+                              {item.daysUntilRestock !== null
+                                ? `${item.daysUntilRestock} days`
+                                : "N/A"}
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-right">
+                              <span className="text-sm font-semibold text-blue-600">
+                                {formatNumber(item.suggestedOrderQuantity)}
+                              </span>
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap">
+                              <span
+                                className={`px-2 py-0.5 inline-flex text-xs leading-4 font-semibold rounded-full border ${getStatusColor(
+                                  item.status
+                                )}`}
+                              >
+                                {getStatusLabel(item.status)}
+                              </span>
+                            </td>
+                            <td className="px-2 py-3 whitespace-nowrap text-sm text-gray-700">
+                              <span title={lastUpdatedExact}>
+                                {lastUpdatedRelative}
+                              </span>
+                              <span className="block text-xs text-gray-400">
+                                {lastUpdatedExact}
+                              </span>
+                            </td>
+                            <td
+                              className="px-2 py-3 text-sm font-medium sticky right-0 bg-white z-20 overflow-hidden border-l border-gray-200"
+                              style={{
+                                width: "150px",
+                                minWidth: "150px",
+                                maxWidth: "150px",
+                              }}
+                            >
+                              <div className="flex flex-wrap gap-2 items-center justify-start">
+                                {isEditing ? (
+                                  <>
+                                    <button
+                                      type="button"
+                                      onClick={() => handleSave(item.itemGuid)}
+                                      className={`text-xs px-3 py-1 rounded border transition ${
+                                        saveDisabled
+                                          ? "text-gray-400 border-gray-200 cursor-not-allowed"
+                                          : "text-white bg-blue-600 border-blue-600 hover:bg-blue-700"
+                                      }`}
+                                      disabled={saveDisabled}
+                                    >
+                                      {savingItem === item.itemGuid
+                                        ? "Saving..."
+                                        : "Save"}
+                                    </button>
+                                    <button
+                                      type="button"
+                                      onClick={handleCancel}
+                                      className="text-xs px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-50"
+                                    >
+                                      Cancel
+                                    </button>
+                                  </>
+                                ) : (
+                                  <button
+                                    type="button"
+                                    onClick={() => handleEdit(item)}
+                                    className="text-xs px-3 py-1 rounded border border-blue-200 text-blue-700 hover:bg-blue-50"
+                                  >
+                                    Edit
+                                  </button>
+                                )}
+                              </div>
+                            </td>
+                            <td
+                              className="px-2 py-2 bg-white"
+                              style={{
+                                width: "20px",
+                                minWidth: "20px",
+                                maxWidth: "20px",
+                              }}
+                            ></td>
+                          </tr>
+                          {isEditing && inlineError && (
+                            <tr>
+                              <td
+                                colSpan="10"
+                                className="px-6 py-2 text-sm text-red-700 bg-red-50 border-t border-red-100"
+                              >
+                                {inlineError}
+                              </td>
+                            </tr>
+                          )}
+                        </Fragment>
+                      );
+                    })
                   )}
                 </tbody>
               </table>

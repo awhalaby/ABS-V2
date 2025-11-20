@@ -14,45 +14,14 @@ export default function VelocityTable({
   columns = [],
   sortable = true,
   filterable = false,
+  enableExport = false,
+  exportFileName = "velocity-data.csv",
   onRowClick,
   className = "",
 }) {
   const [sortColumn, setSortColumn] = useState(null);
   const [sortDirection, setSortDirection] = useState("asc");
   const [filter, setFilter] = useState("");
-
-  // Sort data
-  const sortedData = [...data].sort((a, b) => {
-    if (!sortColumn) return 0;
-
-    const aVal = a[sortColumn];
-    const bVal = b[sortColumn];
-
-    if (aVal === bVal) return 0;
-
-    const comparison = aVal < bVal ? -1 : 1;
-    return sortDirection === "asc" ? comparison : -comparison;
-  });
-
-  // Filter data
-  const filteredData = filterable
-    ? sortedData.filter((row) => {
-        return Object.values(row).some((val) =>
-          String(val).toLowerCase().includes(filter.toLowerCase())
-        );
-      })
-    : sortedData;
-
-  const handleSort = (column) => {
-    if (!sortable) return;
-
-    if (sortColumn === column) {
-      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
-    } else {
-      setSortColumn(column);
-      setSortDirection("asc");
-    }
-  };
 
   const formatCellValue = (value, column) => {
     if (value === null || value === undefined) return "-";
@@ -82,6 +51,77 @@ export default function VelocityTable({
     return String(value);
   };
 
+  // Sort data
+  const sortedData = [...data].sort((a, b) => {
+    if (!sortColumn) return 0;
+
+    const aVal = a[sortColumn];
+    const bVal = b[sortColumn];
+
+    if (aVal === bVal) return 0;
+
+    const comparison = aVal < bVal ? -1 : 1;
+    return sortDirection === "asc" ? comparison : -comparison;
+  });
+
+  // Filter data
+  const filteredData = filterable
+    ? sortedData.filter((row) => {
+        return Object.values(row).some((val) =>
+          String(val).toLowerCase().includes(filter.toLowerCase())
+        );
+      })
+    : sortedData;
+
+  const canExport = enableExport && filteredData.length > 0;
+
+  const handleExport = () => {
+    if (!canExport || typeof window === "undefined") {
+      return;
+    }
+
+    const headers = columns.map((column) => column.label || column.key);
+    const rows = filteredData.map((row) =>
+      columns.map((column) => formatCellValue(row[column.key], column.key))
+    );
+
+    const csvContent = [headers, ...rows]
+      .map((row) =>
+        row
+          .map((cell) => {
+            const value =
+              cell === null || cell === undefined ? "" : String(cell);
+            const escaped = value.replace(/"/g, '""');
+            return `"${escaped}"`;
+          })
+          .join(",")
+      )
+      .join("\n");
+
+    const blob = new Blob(["\ufeff" + csvContent], {
+      type: "text/csv;charset=utf-8;",
+    });
+    const url = window.URL.createObjectURL(blob);
+    const link = document.createElement("a");
+    link.href = url;
+    link.setAttribute("download", exportFileName);
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    window.URL.revokeObjectURL(url);
+  };
+
+  const handleSort = (column) => {
+    if (!sortable) return;
+
+    if (sortColumn === column) {
+      setSortDirection(sortDirection === "asc" ? "desc" : "asc");
+    } else {
+      setSortColumn(column);
+      setSortDirection("asc");
+    }
+  };
+
   if (data.length === 0) {
     return (
       <div className="text-center py-8 text-gray-500">No data available</div>
@@ -90,15 +130,31 @@ export default function VelocityTable({
 
   return (
     <div className={className}>
-      {filterable && (
-        <div className="mb-4">
-          <input
-            type="text"
-            placeholder="Filter..."
-            value={filter}
-            onChange={(e) => setFilter(e.target.value)}
-            className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
-          />
+      {(filterable || enableExport) && (
+        <div className="mb-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between">
+          {filterable && (
+            <input
+              type="text"
+              placeholder="Filter..."
+              value={filter}
+              onChange={(e) => setFilter(e.target.value)}
+              className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500 md:max-w-sm"
+            />
+          )}
+          {enableExport && (
+            <button
+              type="button"
+              onClick={handleExport}
+              disabled={!canExport}
+              className={`inline-flex items-center justify-center rounded-md border px-4 py-2 text-sm font-medium shadow-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:ring-offset-2 ${
+                canExport
+                  ? "border-blue-600 bg-blue-600 text-white hover:bg-blue-700"
+                  : "border-gray-300 bg-gray-100 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              Export CSV
+            </button>
+          )}
         </div>
       )}
 

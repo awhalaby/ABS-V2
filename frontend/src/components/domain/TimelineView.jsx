@@ -1,4 +1,4 @@
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   DndContext,
   DragOverlay,
@@ -26,6 +26,10 @@ import { formatTime } from "../../utils/formatters.js";
  * @param {number} options.minutesPerPixel - Minutes per pixel for width calculation (default: 1)
  * @param {number} options.rackHeight - Height of each rack row in pixels (default: 120)
  */
+const DEFAULT_MINUTES_PER_PIXEL = 0.3;
+const MIN_MINUTES_PER_PIXEL = 0.1;
+const MAX_MINUTES_PER_PIXEL = 1.2;
+
 export default function TimelineView({
   batches = [],
   onBatchClick,
@@ -35,12 +39,53 @@ export default function TimelineView({
   onBatchMove = null,
   canEdit = true,
 }) {
-  const { hourInterval = 1, minutesPerPixel = 0.3, rackHeight = 140 } = options;
+  const {
+    hourInterval = 1,
+    minutesPerPixel: minutesPerPixelProp = DEFAULT_MINUTES_PER_PIXEL,
+    rackHeight = 100,
+    maxHeight = 1100,
+    autoHeight = false,
+  } = options;
+  const [minutesPerPixel, setMinutesPerPixel] = useState(minutesPerPixelProp);
   const [selectedBatch, setSelectedBatch] = useState(null);
   const [activeId, setActiveId] = useState(null);
   const [dropTarget, setDropTarget] = useState(null);
   const [dropPreviewTime, setDropPreviewTime] = useState(null);
   const [dropPreviewPosition, setDropPreviewPosition] = useState(null);
+  const [containerWidth, setContainerWidth] = useState(null);
+  const timelineScrollRef = useRef(null);
+  const hasAppliedInitialFit = useRef(false);
+  const clampMinutesPerPixel = (value) =>
+    Math.min(Math.max(value, MIN_MINUTES_PER_PIXEL), MAX_MINUTES_PER_PIXEL);
+  const handleZoom = (direction) => {
+    setMinutesPerPixel((prev) => {
+      hasAppliedInitialFit.current = true;
+      const factor = direction === "in" ? 0.8 : 1.25;
+      const next = clampMinutesPerPixel(prev * factor);
+      return Number(next.toFixed(4));
+    });
+  };
+  const handleResetZoom = () => {
+    hasAppliedInitialFit.current = true;
+    setMinutesPerPixel(minutesPerPixelProp);
+  };
+  useEffect(() => {
+    setMinutesPerPixel((prev) => {
+      if (prev === minutesPerPixelProp) return prev;
+      return minutesPerPixelProp;
+    });
+  }, [minutesPerPixelProp]);
+
+  useEffect(() => {
+    const updateWidth = () => {
+      if (timelineScrollRef.current) {
+        setContainerWidth(timelineScrollRef.current.clientWidth);
+      }
+    };
+    updateWidth();
+    window.addEventListener("resize", updateWidth);
+    return () => window.removeEventListener("resize", updateWidth);
+  }, []);
 
   const sensors = useSensors(
     useSensor(PointerSensor, {
@@ -297,14 +342,8 @@ export default function TimelineView({
       rackHeights[rack] = rackHeight;
     });
 
-    // Calculate actual timeline width (ensure it's wide enough)
-    // With minutesPerPixel = 0.3, 11 hours = 660 minutes = 2200px base width
-    const calculatedWidth = totalMinutes / minutesPerPixel;
-
-    // Ensure minimum width for good spacing (2200px minimum for 11-hour day)
-    // This ensures cards have enough space and don't overlap
-    const minWidth = 2200;
-    const timelineWidth = Math.max(calculatedWidth, minWidth);
+    // Calculate actual timeline width
+    const timelineWidth = totalMinutes / minutesPerPixel;
 
     return {
       startMinutes,
@@ -326,6 +365,35 @@ export default function TimelineView({
     rackHeights,
     startMinutes,
   } = timelineData;
+
+  useEffect(() => {
+    if (hasAppliedInitialFit.current) return;
+    if (!containerWidth || !timelineData.totalMinutes) return;
+    const fitValue = clampMinutesPerPixel(
+      timelineData.totalMinutes / containerWidth
+    );
+    if (Math.abs(fitValue - minutesPerPixel) > 0.002) {
+      setMinutesPerPixel(Number(fitValue.toFixed(4)));
+    }
+    hasAppliedInitialFit.current = true;
+  }, [containerWidth, timelineData.totalMinutes, minutesPerPixel]);
+
+  const handleFitToWidth = () => {
+    if (!containerWidth || !timelineData.totalMinutes) return;
+    hasAppliedInitialFit.current = true;
+    const next = clampMinutesPerPixel(
+      timelineData.totalMinutes / containerWidth
+    );
+    setMinutesPerPixel(Number(next.toFixed(4)));
+  };
+
+  const zoomPercent = useMemo(() => {
+    const baseline = minutesPerPixelProp || DEFAULT_MINUTES_PER_PIXEL;
+    if (!minutesPerPixel) return 100;
+    return Math.round((baseline / minutesPerPixel) * 100);
+  }, [minutesPerPixelProp, minutesPerPixel]);
+  const canZoomIn = minutesPerPixel > MIN_MINUTES_PER_PIXEL + 0.001;
+  const canZoomOut = minutesPerPixel < MAX_MINUTES_PER_PIXEL - 0.001;
 
   // Calculate current time position
   const currentTimePosition = useMemo(() => {
@@ -389,10 +457,70 @@ export default function TimelineView({
       onDragCancel={handleDragCancel}
     >
       <div className="timeline-view bg-white rounded-lg border border-gray-200 overflow-hidden">
+        <div className="flex flex-wrap items-center justify-between gap-3 px-4 py-3 border-b border-gray-200 bg-gray-50 text-sm">
+          <span className="font-semibold text-gray-700">Timeline controls</span>
+          <div className="flex flex-wrap items-center gap-2 text-xs">
+            <button
+              type="button"
+              onClick={() => handleZoom("out")}
+              disabled={!canZoomOut}
+              className={`px-2 py-1 rounded border ${
+                canZoomOut
+                  ? "bg-white hover:bg-gray-100 border-gray-300 text-gray-700"
+                  : "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
+              aria-label="Zoom out"
+            >
+              −
+            </button>
+            <span className="px-2 py-1 min-w-[48px] text-center font-semibold text-gray-700 bg-white border border-gray-200 rounded">
+              {zoomPercent}%
+            </span>
+            <button
+              type="button"
+              onClick={() => handleZoom("in")}
+              disabled={!canZoomIn}
+              className={`px-2 py-1 rounded border ${
+                canZoomIn
+                  ? "bg-white hover:bg-gray-100 border-gray-300 text-gray-700"
+                  : "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
+              aria-label="Zoom in"
+            >
+              +
+            </button>
+            <span
+              className="w-px h-4 bg-gray-300 mx-1"
+              aria-hidden="true"
+            ></span>
+            <button
+              type="button"
+              onClick={handleFitToWidth}
+              disabled={!containerWidth}
+              className={`px-3 py-1 rounded border ${
+                containerWidth
+                  ? "bg-white hover:bg-gray-100 border-gray-300 text-gray-700"
+                  : "bg-gray-100 border-gray-200 text-gray-400 cursor-not-allowed"
+              }`}
+            >
+              Fit width
+            </button>
+            <button
+              type="button"
+              onClick={handleResetZoom}
+              className="px-3 py-1 rounded border border-gray-300 text-gray-700 hover:bg-gray-100"
+            >
+              Reset
+            </button>
+          </div>
+        </div>
         {/* Scrollable timeline body */}
         <div
-          className="overflow-x-auto overflow-y-auto"
-          style={{ maxHeight: "900px" }}
+          className={`overflow-x-auto ${
+            autoHeight ? "overflow-y-visible" : "overflow-y-auto"
+          }`}
+          style={{ maxHeight: autoHeight ? "none" : `${maxHeight}px` }}
+          ref={timelineScrollRef}
         >
           <div
             style={{
@@ -409,7 +537,7 @@ export default function TimelineView({
                     <div className="w-24 flex-shrink-0 text-sm font-semibold text-blue-900">
                       Oven {ovenGroup.oven}
                     </div>
-                    <div className="flex-1 h-6 relative">
+                    <div className="flex-1 h-10 relative">
                       {/* Time grid lines */}
                       {timeSlots.map((slot, idx) => (
                         <div
@@ -422,6 +550,21 @@ export default function TimelineView({
                             }px`,
                           }}
                         />
+                      ))}
+                      {timeSlots.map((slot, idx) => (
+                        <div
+                          key={`label-${idx}`}
+                          className="absolute top-0 text-[10px] text-blue-800 font-semibold"
+                          style={{
+                            left: `${
+                              (slot.minutes - timelineData.startMinutes) /
+                              minutesPerPixel
+                            }px`,
+                            transform: "translateX(-50%)",
+                          }}
+                        >
+                          {slot.time}
+                        </div>
                       ))}
                     </div>
                   </div>
@@ -474,12 +617,25 @@ export default function TimelineView({
 
                             {/* Current time indicator line */}
                             {currentTimePosition !== null && (
-                              <div
-                                className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none shadow-lg"
-                                style={{
-                                  left: `${currentTimePosition}px`,
-                                }}
-                              />
+                              <>
+                                <div
+                                  className="absolute top-0 bottom-0 w-0.5 bg-red-500 z-30 pointer-events-none shadow-lg"
+                                  style={{
+                                    left: `${currentTimePosition}px`,
+                                  }}
+                                />
+                                {rackNum === 1 && (
+                                  <div
+                                    className="absolute z-30 px-2 py-0.5 text-[10px] font-semibold text-white bg-red-500 rounded shadow pointer-events-none"
+                                    style={{
+                                      left: `${currentTimePosition}px`,
+                                      transform: "translate(-50%, -120%)",
+                                    }}
+                                  >
+                                    Now {currentTime || "--:--"}
+                                  </div>
+                                )}
+                              </>
                             )}
 
                             {/* Snap indicators at 20-minute increments */}

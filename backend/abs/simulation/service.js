@@ -793,7 +793,7 @@ export async function calculateSuggestedBatches(simulationId) {
     }
 
     // If we have a shortfall, suggest batches
-    if (shortfall > 0) {
+    if (shortfall > 5) {
       const batchSize = bakeSpec.capacityPerRack;
       const batchesNeeded = Math.ceil(shortfall / batchSize);
 
