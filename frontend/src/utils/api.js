@@ -173,8 +173,8 @@ export const simulationAPI = {
     }),
   addBatch: (id, batchData) =>
     api.post(`/api/abs/simulation/${id}/batch/add`, batchData),
-  getSuggestedBatches: (id) =>
-    api.get(`/api/abs/simulation/${id}/suggested-batches`),
+  getSuggestedBatches: (id, params = {}) =>
+    api.get(`/api/abs/simulation/${id}/suggested-batches`, { params }),
   // Catering orders
   createCateringOrder: (id, orderData) =>
     api.post(`/api/abs/simulation/${id}/catering-order`, orderData),

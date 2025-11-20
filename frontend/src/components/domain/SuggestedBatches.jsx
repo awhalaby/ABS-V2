@@ -10,6 +10,7 @@ export default function SuggestedBatches({
   onAddBatch,
   enabled = false,
   autoAdd = false,
+  suggestionMode = "predictive",
   existingBatches = [],
   currentSimulationTime = null, // Current simulation time in "HH:MM" format
 }) {
@@ -27,7 +28,18 @@ export default function SuggestedBatches({
   const fetchFunctionRef = useRef(null); // Store fetch function for interval
   const simulationIdRef = useRef(simulationId); // Store simulationId for interval
   const autoAddRef = useRef(autoAdd); // Store autoAdd for interval callback
-
+  const getConfidenceColor = (percent) => {
+    if (typeof percent !== "number") {
+      return "text-gray-500";
+    }
+    if (percent >= 80) {
+      return "text-green-600";
+    }
+    if (percent >= 50) {
+      return "text-yellow-600";
+    }
+    return "text-red-600";
+  };
   // Helper function to create a unique key for a batch
   const getBatchKey = (batch) => `${batch.itemGuid}-${batch.startTime}`;
 
@@ -87,10 +99,13 @@ export default function SuggestedBatches({
       try {
         console.log(
           "[SuggestedBatches] Fetching batches for simulation:",
-          currentSimulationId
+          currentSimulationId,
+          "mode:",
+          suggestionMode
         );
         const response = await simulationAPI.getSuggestedBatches(
-          currentSimulationId
+          currentSimulationId,
+          { mode: suggestionMode }
         );
         // Axios interceptor already extracts response.data, so response is the data object
         // Backend returns: { success: true, data: { suggestedBatches: [...] } }
@@ -229,7 +244,7 @@ export default function SuggestedBatches({
       isFetchingRef.current = false;
       fetchFunctionRef.current = null;
     };
-  }, [enabled, simulationId, autoAdd, intervalRefreshTrigger]); // intervalRefreshTrigger forces re-fetch on interval
+  }, [enabled, simulationId, autoAdd, intervalRefreshTrigger, suggestionMode]); // intervalRefreshTrigger forces re-fetch on interval
 
   // Helper function to convert "HH:MM" time string to minutes since midnight
   const parseTimeToMinutes = (timeStr) => {
@@ -435,113 +450,186 @@ export default function SuggestedBatches({
       className="bg-white shadow rounded-lg p-6 flex flex-col"
       style={{ minHeight: "500px", maxHeight: "500px" }}
     >
-      <div className="flex justify-between items-center mb-4">
-        <div>
-          <h3 className="text-lg font-medium text-gray-900">
-            Suggested Batches ({visibleBatches.length})
-          </h3>
+      <div className="flex flex-col gap-1 mb-4">
+        <h3 className="text-lg font-medium text-gray-900">
+          Suggested Batches ({visibleBatches.length})
+        </h3>
+        <div className="flex flex-wrap items-center gap-2 text-xs text-gray-500">
+          <span>
+            Algorithm:{" "}
+            <span className="font-semibold text-gray-700">
+              {suggestionMode === "reactive"
+                ? "Reactive (recent demand)"
+                : "Predictive (forecast)"}
+            </span>
+          </span>
           {lastRefreshTime && (
-            <p className="text-xs text-gray-500 mt-1">
-              Last refreshed: {lastRefreshTime.toLocaleTimeString()}
-            </p>
+            <span>
+              • Last refreshed: {lastRefreshTime.toLocaleTimeString()}
+            </span>
           )}
         </div>
       </div>
 
       <div className="flex-1 overflow-y-auto space-y-3">
-        {visibleBatches.map((batch) => (
-          <div
-            key={batch.batchId}
-            className="border border-yellow-200 rounded-lg p-4 bg-yellow-50"
-          >
-            <div className="flex justify-between items-start mb-2">
-              <div className="flex-1">
-                <h4 className="font-semibold text-gray-900">
-                  {batch.displayName}
-                </h4>
-                <p className="text-xs text-gray-500 font-mono mt-1">
-                  {batch.itemGuid}
-                </p>
-              </div>
-              <button
-                onClick={() => handleAddBatch(batch)}
-                className="touch-button px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 active:bg-green-800"
-              >
-                Add to Schedule
-              </button>
-            </div>
-
-            <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-yellow-200">
-              <div>
-                <p className="text-xs text-gray-600">Quantity</p>
-                <p className="text-sm font-semibold text-gray-900">
-                  {formatNumber(batch.quantity)}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-600">Start Time</p>
-                <p className="text-sm font-semibold text-gray-900">
-                  {batch.startTime}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-600">Available Time</p>
-                <p className="text-sm font-semibold text-gray-900">
-                  {batch.availableTime}
-                </p>
-              </div>
-              <div>
-                <p className="text-xs text-gray-600">Consumption Ratio</p>
-                <p className="text-sm font-semibold text-orange-600">
-                  {batch.reason?.consumptionRatio?.toFixed(2)}x
-                </p>
-              </div>
-            </div>
-
-            {/* Reason details */}
-            {batch.reason && (
-              <div className="mt-3 pt-3 border-t border-yellow-200">
-                <p className="text-xs font-medium text-gray-700 mb-1">
-                  Why this batch is suggested:
-                </p>
-                <div className="text-xs text-gray-600 space-y-1">
-                  <div className="flex justify-between">
-                    <span>Actual orders:</span>
-                    <span className="font-semibold">
-                      {formatNumber(batch.reason.actualQuantity)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Expected orders:</span>
-                    <span className="font-semibold">
-                      {formatNumber(batch.reason.expectedQuantity)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Current inventory:</span>
-                    <span className="font-semibold">
-                      {formatNumber(batch.reason.currentInventory)}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Projected remaining demand:</span>
-                    <span className="font-semibold text-orange-600">
-                      {formatNumber(
-                        Math.round(batch.reason.projectedRemainingDemand)
-                      )}
-                    </span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span>Shortfall:</span>
-                    <span className="font-semibold text-red-600">
-                      {formatNumber(batch.reason.shortfall)}
-                    </span>
-                  </div>
+        {visibleBatches.map((batch) => {
+          const confidenceDetails = batch.reason?.confidenceDetails;
+          const observedUnits =
+            confidenceDetails?.observedUnits ??
+            confidenceDetails?.expectedUnitsObserved ??
+            confidenceDetails?.actualUnitsObserved ??
+            null;
+          const observationLabel =
+            confidenceDetails?.observationUnitsLabel ||
+            (batch.algorithm === "reactive" ? "actual" : "expected");
+          return (
+            <div
+              key={batch.batchId}
+              className="border border-yellow-200 rounded-lg p-4 bg-yellow-50"
+            >
+              <div className="flex justify-between items-start mb-2">
+                <div className="flex-1">
+                  <h4 className="font-semibold text-gray-900">
+                    {batch.displayName}
+                  </h4>
+                  <p className="text-xs text-gray-500 font-mono mt-1">
+                    {batch.itemGuid}
+                  </p>
+                </div>
+                <div className="flex flex-col items-end gap-2">
+                  <span className="text-[10px] uppercase tracking-wide font-semibold text-gray-600 bg-white/70 border border-yellow-200 rounded px-2 py-0.5">
+                    {batch.algorithm === "reactive" ? "Reactive" : "Predictive"}
+                  </span>
+                  <button
+                    onClick={() => handleAddBatch(batch)}
+                    className="touch-button px-3 py-1 bg-green-600 text-white text-sm rounded hover:bg-green-700 active:bg-green-800"
+                  >
+                    Add to Schedule
+                  </button>
                 </div>
               </div>
-            )}
-          </div>
-        ))}
+
+              <div className="grid grid-cols-2 gap-3 mt-3 pt-3 border-t border-yellow-200">
+                <div>
+                  <p className="text-xs text-gray-600">Quantity</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {formatNumber(batch.quantity)}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-600">Start Time</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {batch.startTime}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-600">Available Time</p>
+                  <p className="text-sm font-semibold text-gray-900">
+                    {batch.availableTime}
+                  </p>
+                </div>
+                <div>
+                  <p className="text-xs text-gray-600">Consumption Ratio</p>
+                  <p className="text-sm font-semibold text-orange-600">
+                    {batch.reason?.consumptionRatio
+                      ? `${batch.reason.consumptionRatio.toFixed(2)}x`
+                      : batch.algorithm === "reactive"
+                      ? `${(batch.reason?.consumptionRate || 0).toFixed(
+                          2
+                        )} / min`
+                      : "—"}
+                  </p>
+                </div>
+              </div>
+
+              {/* Reason details */}
+              {batch.reason && (
+                <div className="mt-3 pt-3 border-t border-yellow-200">
+                  <p className="text-xs font-medium text-gray-700 mb-1">
+                    Why this batch is suggested:
+                  </p>
+                  <div className="text-xs text-gray-600 space-y-1">
+                    {batch.reason.actualQuantity !== undefined && (
+                      <div className="flex justify-between">
+                        <span>Actual orders:</span>
+                        <span className="font-semibold">
+                          {formatNumber(batch.reason.actualQuantity)}
+                        </span>
+                      </div>
+                    )}
+                    {batch.reason.expectedQuantity !== undefined && (
+                      <div className="flex justify-between">
+                        <span>Expected orders:</span>
+                        <span className="font-semibold">
+                          {formatNumber(batch.reason.expectedQuantity)}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span>Current inventory:</span>
+                      <span className="font-semibold">
+                        {formatNumber(batch.reason.currentInventory)}
+                      </span>
+                    </div>
+                    {(batch.reason.projectedRemainingDemand !== undefined ||
+                      batch.reason.targetBufferMinutes !== undefined) && (
+                      <div className="flex justify-between">
+                        <span>Projected remaining demand / buffer:</span>
+                        <span className="font-semibold text-orange-600">
+                          {batch.algorithm === "reactive"
+                            ? `${formatNumber(
+                                Math.round(
+                                  batch.reason.targetBufferMinutes || 0
+                                )
+                              )} min buffer`
+                            : formatNumber(
+                                Math.round(
+                                  batch.reason.projectedRemainingDemand || 0
+                                )
+                              )}
+                        </span>
+                      </div>
+                    )}
+                    <div className="flex justify-between">
+                      <span>Shortfall:</span>
+                      <span className="font-semibold text-red-600">
+                        {formatNumber(batch.reason.shortfall)}
+                      </span>
+                    </div>
+                    <div className="flex justify-between items-center">
+                      <span>Confidence:</span>
+                      <span
+                        className={`font-semibold ${getConfidenceColor(
+                          batch.reason?.confidencePercent
+                        )}`}
+                      >
+                        {typeof batch.reason?.confidencePercent === "number"
+                          ? `${batch.reason.confidencePercent}%`
+                          : "—"}
+                      </span>
+                    </div>
+                    {confidenceDetails && (
+                      <p className="text-[11px] text-gray-500 mt-1 leading-snug">
+                        Based on {formatNumber(observedUnits || 0)}{" "}
+                        {observationLabel} units from{" "}
+                        {confidenceDetails.observationWindowStart || "start"} to{" "}
+                        {confidenceDetails.observationWindowEnd || "now"} (~
+                        {formatNumber(
+                          confidenceDetails.observationMinutes || 0
+                        )}{" "}
+                        min). Target:{" "}
+                        {formatNumber(
+                          confidenceDetails.targetUnitsForFullConfidence || 0
+                        )}{" "}
+                        units for 100% confidence.
+                      </p>
+                    )}
+                  </div>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );

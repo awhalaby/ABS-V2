@@ -505,6 +505,9 @@ export const deleteSimulationBatchController = asyncHandler(
  */
 export const getSuggestedBatchesController = asyncHandler(async (req, res) => {
   const { id } = req.params;
+  const rawMode = typeof req.query.mode === "string" ? req.query.mode : "";
+  const mode =
+    rawMode.trim().length > 0 ? rawMode.trim().toLowerCase() : "predictive";
 
   if (!id) {
     return res.status(400).json({
@@ -515,11 +518,12 @@ export const getSuggestedBatchesController = asyncHandler(async (req, res) => {
     });
   }
 
-  const suggestedBatches = await calculateSuggestedBatches(id);
+  const suggestedBatches = await calculateSuggestedBatches(id, { mode });
 
   res.status(200).json({
     success: true,
     data: {
+      mode,
       suggestedBatches,
     },
   });

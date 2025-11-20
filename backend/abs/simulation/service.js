@@ -24,6 +24,99 @@ import { getForecast } from "../../forecast/service.js";
 const activeSimulations = new Map();
 
 /**
+ * Helper functions for batch scheduling operations
+ */
+
+/**
+ * Round minutes to nearest 20-minute increment
+ * @param {number} minutes - Minutes to round
+ * @param {string} mode - 'ceil' to round up, 'round' to round to nearest (default: 'ceil')
+ * @returns {number} Rounded minutes
+ */
+function roundToTwentyMinuteIncrement(minutes, mode = "ceil") {
+  const increment = 20;
+  if (mode === "round") {
+    return Math.round(minutes / increment) * increment;
+  }
+  return Math.ceil(minutes / increment) * increment;
+}
+
+/**
+ * Calculate oven number from rack position
+ * @param {number} rack - Rack position (1-12)
+ * @returns {number} Oven number (1-2)
+ */
+function getOvenFromRack(rack) {
+  return Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+}
+
+/**
+ * Initialize rack end times map with all racks set to 0
+ * @returns {Map} Map of rack -> end time (all initialized to 0)
+ */
+function initializeRackEndTimes() {
+  const rackEndTimes = new Map();
+  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
+    rackEndTimes.set(rack, 0);
+  }
+  return rackEndTimes;
+}
+
+/**
+ * Calculate when each rack becomes available based on existing batches
+ * @param {Array} batches - Array of batch objects
+ * @param {Map} rackEndTimes - Map to update (rack -> end time)
+ */
+function calculateRackEndTimes(batches, rackEndTimes) {
+  batches.forEach((batch) => {
+    if (batch.rackPosition && batch.endTime) {
+      const batchEndTime = parseTimeToMinutes(batch.endTime);
+      const rack = batch.rackPosition;
+      const currentEndTime = rackEndTimes.get(rack) || 0;
+      if (batchEndTime > currentEndTime) {
+        rackEndTimes.set(rack, batchEndTime);
+      }
+    }
+  });
+}
+
+/**
+ * Check if two time ranges overlap
+ * @param {number} start1 - Start time of first range (minutes)
+ * @param {number} end1 - End time of first range (minutes)
+ * @param {number} start2 - Start time of second range (minutes)
+ * @param {number} end2 - End time of second range (minutes)
+ * @returns {boolean} True if ranges overlap
+ */
+function batchesOverlap(start1, end1, start2, end2) {
+  return (
+    (start1 >= start2 && start1 < end2) ||
+    (end1 > start2 && end1 <= end2) ||
+    (start1 <= start2 && end1 >= end2)
+  );
+}
+
+/**
+ * Sort batches by start time (ascending)
+ * @param {Array} batches - Array of batch objects
+ */
+function sortBatchesByStartTime(batches) {
+  batches.sort((a, b) => {
+    const timeA = parseTimeToMinutes(a.startTime);
+    const timeB = parseTimeToMinutes(b.startTime);
+    return timeA - timeB;
+  });
+}
+
+const CONFIDENCE_TARGET_UNITS = 50;
+const REACTIVE_WINDOW_MINUTES = 60;
+const REACTIVE_MIN_OBSERVED_UNITS = 10;
+const REACTIVE_MIN_CONSUMPTION_RATE = 0.1;
+const REACTIVE_DEPLETION_THRESHOLD_MINUTES = 90;
+const REACTIVE_TARGET_BUFFER_MINUTES = 180;
+const REACTIVE_CONFIDENCE_TARGET_UNITS = 30;
+
+/**
  * Simulation state
  */
 export class SimulationState {
@@ -323,11 +416,7 @@ export async function startSimulation(config) {
   }));
 
   // Sort batches by start time
-  simulation.batches.sort((a, b) => {
-    const timeA = parseTimeToMinutes(a.startTime);
-    const timeB = parseTimeToMinutes(b.startTime);
-    return timeA - timeB;
-  });
+  sortBatchesByStartTime(simulation.batches);
 
   simulation.addEvent("simulation_started", "Simulation started", {
     totalBatches: simulation.batches.length,
@@ -675,7 +764,18 @@ export function getAllSimulations() {
  * @param {string} simulationId - Simulation ID
  * @returns {Promise<Array>} Array of suggested batch objects
  */
-export async function calculateSuggestedBatches(simulationId) {
+export async function calculateSuggestedBatches(simulationId, options = {}) {
+  const mode =
+    typeof options.mode === "string"
+      ? options.mode.toLowerCase()
+      : "predictive";
+  if (mode === "reactive") {
+    return calculateReactiveSuggestedBatches(simulationId);
+  }
+  return calculatePredictiveSuggestedBatches(simulationId);
+}
+
+async function calculatePredictiveSuggestedBatches(simulationId) {
   const simulation = activeSimulations.get(simulationId);
   if (!simulation) {
     return [];
@@ -765,7 +865,27 @@ export async function calculateSuggestedBatches(simulationId) {
 
     // Calculate total needed: projected remaining demand + safety buffer
     const restockThreshold = bakeSpec.restockThreshold || 20;
-    const totalNeeded = projectedRemainingDemand + restockThreshold;
+    const totalNeeded = projectedRemainingDemand;
+
+    const elapsedMinutes = Math.max(
+      0,
+      currentTime - BUSINESS_HOURS.START_MINUTES
+    );
+    const observationStartTime = formatMinutesToTime(
+      BUSINESS_HOURS.START_MINUTES
+    );
+    const observationEndTime = formatMinutesToTime(currentTime);
+    const confidenceRatio = Math.min(
+      1,
+      expectedQuantity / CONFIDENCE_TARGET_UNITS
+    );
+    const confidencePercent = Math.round(confidenceRatio * 100);
+
+    console.log(
+      `[SuggestedBatches][Predictive] Confidence for ${
+        bakeSpec.displayName || itemGuid
+      }: ${confidencePercent}% based on ${expectedQuantity} expected units from ${observationStartTime} to ${observationEndTime} (${elapsedMinutes} minutes observed). Target volume for 100% confidence: ${CONFIDENCE_TARGET_UNITS} units.`
+    );
 
     // Calculate how much inventory we'll have after current batches complete
     // Count batches that will become available after current time
@@ -821,11 +941,10 @@ export async function calculateSuggestedBatches(simulationId) {
       );
 
       // Round to next 20-minute increment
-      const roundToTwentyMinuteIncrement = (minutes) => {
-        const increment = 20;
-        return Math.ceil(minutes / increment) * increment;
-      };
-      const roundedStartTime = roundToTwentyMinuteIncrement(targetStartTime);
+      const roundedStartTime = roundToTwentyMinuteIncrement(
+        targetStartTime,
+        "ceil"
+      );
 
       // Calculate when batch would be available (start + bake + cool)
       const batchAvailableTime = roundedStartTime + bakeTime + coolTime;
@@ -859,7 +978,9 @@ export async function calculateSuggestedBatches(simulationId) {
               batchStartTime + bakeTime + coolTime
             ),
             status: "suggested",
+            algorithm: "predictive",
             reason: {
+              algorithm: "predictive",
               actualQuantity,
               expectedQuantity,
               currentInventory,
@@ -868,6 +989,16 @@ export async function calculateSuggestedBatches(simulationId) {
               shortfall,
               parMax,
               consumptionRatio: Math.round(consumptionRatio * 100) / 100,
+              confidencePercent,
+              confidenceDetails: {
+                expectedUnitsObserved: expectedQuantity,
+                observedUnits: expectedQuantity,
+                observationUnitsLabel: "expected",
+                targetUnitsForFullConfidence: CONFIDENCE_TARGET_UNITS,
+                observationWindowStart: observationStartTime,
+                observationWindowEnd: observationEndTime,
+                observationMinutes: elapsedMinutes,
+              },
             },
           });
         }
@@ -876,6 +1007,202 @@ export async function calculateSuggestedBatches(simulationId) {
   });
 
   return suggestedBatches;
+}
+
+async function calculateReactiveSuggestedBatches(simulationId) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return [];
+  }
+
+  const currentTime = simulation.currentTime;
+  const inventory =
+    simulation.inventory instanceof Map
+      ? simulation.inventory
+      : new Map(Object.entries(simulation.inventory || {}));
+  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
+  const processedOrdersMap =
+    processedOrdersRaw instanceof Map
+      ? processedOrdersRaw
+      : new Map(
+          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
+            (item) => [item.itemGuid, item]
+          )
+        );
+
+  const bakeSpecs = await getBakeSpecs();
+  const bakeSpecMap = new Map();
+  bakeSpecs.forEach((spec) => {
+    bakeSpecMap.set(spec.itemGuid, spec);
+  });
+
+  const allBatches = [
+    ...(simulation.batches || []),
+    ...(simulation.completedBatches || []),
+  ];
+
+  const observationStartMinutes = Math.max(
+    BUSINESS_HOURS.START_MINUTES,
+    currentTime - REACTIVE_WINDOW_MINUTES
+  );
+  const observationEndTime = formatMinutesToTime(currentTime);
+  const observationStartTime = formatMinutesToTime(observationStartMinutes);
+  const observedMinutes = Math.max(1, currentTime - observationStartMinutes);
+
+  const suggestions = [];
+
+  processedOrdersMap.forEach((processedItem, itemGuid) => {
+    if (!itemGuid) {
+      return;
+    }
+    const bakeSpec = bakeSpecMap.get(itemGuid);
+    if (!bakeSpec) {
+      return;
+    }
+
+    const currentInventory = inventory.get(itemGuid) || 0;
+    const orders = processedItem?.orders || [];
+    let observedUnits = 0;
+    orders.forEach((order) => {
+      const orderMinutes = parseTimeToMinutes(order.time);
+      if (
+        orderMinutes !== null &&
+        orderMinutes >= observationStartMinutes &&
+        orderMinutes <= currentTime
+      ) {
+        observedUnits += order.quantity || 0;
+      }
+    });
+
+    if (observedUnits < REACTIVE_MIN_OBSERVED_UNITS) {
+      return;
+    }
+
+    const consumptionRate = observedUnits / observedMinutes;
+    if (consumptionRate < REACTIVE_MIN_CONSUMPTION_RATE) {
+      return;
+    }
+
+    const futureSupplyWithinThreshold = allBatches.reduce((sum, batch) => {
+      if (batch.itemGuid !== itemGuid || !batch.availableTime) {
+        return sum;
+      }
+      const availableMinutes = parseTimeToMinutes(batch.availableTime);
+      if (
+        availableMinutes !== null &&
+        availableMinutes > currentTime &&
+        availableMinutes <= currentTime + REACTIVE_DEPLETION_THRESHOLD_MINUTES
+      ) {
+        return sum + (batch.quantity || 0);
+      }
+      return sum;
+    }, 0);
+
+    const netInventoryWithinThreshold =
+      currentInventory + futureSupplyWithinThreshold;
+    const minutesUntilShortage =
+      consumptionRate > 0
+        ? netInventoryWithinThreshold / consumptionRate
+        : Infinity;
+
+    if (minutesUntilShortage > REACTIVE_DEPLETION_THRESHOLD_MINUTES) {
+      return;
+    }
+
+    const futureSupplyWithinBuffer = allBatches.reduce((sum, batch) => {
+      if (batch.itemGuid !== itemGuid || !batch.availableTime) {
+        return sum;
+      }
+      const availableMinutes = parseTimeToMinutes(batch.availableTime);
+      if (
+        availableMinutes !== null &&
+        availableMinutes > currentTime &&
+        availableMinutes <= currentTime + REACTIVE_TARGET_BUFFER_MINUTES
+      ) {
+        return sum + (batch.quantity || 0);
+      }
+      return sum;
+    }, 0);
+
+    const projectedInventory = currentInventory + futureSupplyWithinBuffer;
+    const targetInventory = consumptionRate * REACTIVE_TARGET_BUFFER_MINUTES;
+    let shortfall = Math.max(0, targetInventory - projectedInventory);
+
+    if (shortfall < bakeSpec.capacityPerRack * 0.5) {
+      return;
+    }
+
+    const batchSize = bakeSpec.capacityPerRack;
+    const batchesNeeded = Math.ceil(shortfall / batchSize);
+
+    const startMinutes = roundToTwentyMinuteIncrement(
+      Math.max(currentTime + 10, BUSINESS_HOURS.START_MINUTES),
+      "ceil"
+    );
+    const bakeMinutes = bakeSpec.bakeTimeMinutes || 0;
+    const coolMinutes = bakeSpec.coolTimeMinutes || 0;
+    const availableMinutes = startMinutes + bakeMinutes + coolMinutes;
+    if (availableMinutes > BUSINESS_HOURS.END_MINUTES) {
+      return;
+    }
+
+    const confidencePercent = Math.round(
+      Math.min(1, observedUnits / REACTIVE_CONFIDENCE_TARGET_UNITS) * 100
+    );
+
+    console.log(
+      `[SuggestedBatches][Reactive] ${
+        bakeSpec.displayName || itemGuid
+      } confidence ${confidencePercent}% with ${observedUnits} actual units from ${observationStartTime} to ${observationEndTime} (${observedMinutes} min).`
+    );
+
+    for (let i = 0; i < batchesNeeded; i++) {
+      const batchId = `reactive-${itemGuid}-${Date.now()}-${i}`;
+      suggestions.push({
+        batchId,
+        itemGuid,
+        displayName: bakeSpec.displayName || itemGuid,
+        quantity: batchSize,
+        bakeTime: bakeMinutes,
+        coolTime: coolMinutes,
+        oven:
+          bakeSpec.oven !== undefined && bakeSpec.oven !== null
+            ? bakeSpec.oven
+            : null,
+        freshWindowMinutes: bakeSpec.freshWindowMinutes,
+        restockThreshold: bakeSpec.restockThreshold || 20,
+        rackPosition: null,
+        startTime: formatMinutesToTime(startMinutes),
+        endTime: formatMinutesToTime(startMinutes + bakeMinutes),
+        availableTime: formatMinutesToTime(availableMinutes),
+        status: "suggested",
+        algorithm: "reactive",
+        reason: {
+          algorithm: "reactive",
+          currentInventory,
+          consumptionRate: Math.round(consumptionRate * 100) / 100,
+          observedUnits,
+          windowMinutes: observedMinutes,
+          minutesUntilShortage: Math.round(minutesUntilShortage),
+          targetBufferMinutes: REACTIVE_TARGET_BUFFER_MINUTES,
+          futureSupplyWithinBuffer,
+          projectedInventory,
+          shortfall,
+          confidencePercent,
+          confidenceDetails: {
+            observedUnits,
+            observationUnitsLabel: "actual",
+            observationWindowStart: observationStartTime,
+            observationWindowEnd: observationEndTime,
+            observationMinutes: observedMinutes,
+            targetUnitsForFullConfidence: REACTIVE_CONFIDENCE_TARGET_UNITS,
+          },
+        },
+      });
+    }
+  });
+
+  return suggestions;
 }
 
 /**
@@ -904,11 +1231,10 @@ export async function addSimulationBatch(simulationId, batchData) {
   }
 
   // Round to 20-minute increment
-  const roundToTwentyMinuteIncrement = (minutes) => {
-    const increment = 20;
-    return Math.ceil(minutes / increment) * increment;
-  };
-  const roundedStartMinutes = roundToTwentyMinuteIncrement(startMinutes);
+  const roundedStartMinutes = roundToTwentyMinuteIncrement(
+    startMinutes,
+    "ceil"
+  );
 
   // Find an available rack at this time
   // Check all racks to find one that's free
@@ -916,24 +1242,8 @@ export async function addSimulationBatch(simulationId, batchData) {
     ...(simulation.batches || []),
     ...(simulation.completedBatches || []),
   ];
-  const rackEndTimes = new Map(); // rack -> end time
-
-  // Initialize all racks
-  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-    rackEndTimes.set(rack, 0);
-  }
-
-  // Calculate when each rack becomes available
-  allBatches.forEach((batch) => {
-    if (batch.rackPosition && batch.endTime) {
-      const batchEndTime = parseTimeToMinutes(batch.endTime);
-      const rack = batch.rackPosition;
-      const currentEndTime = rackEndTimes.get(rack) || 0;
-      if (batchEndTime > currentEndTime) {
-        rackEndTimes.set(rack, batchEndTime);
-      }
-    }
-  });
+  const rackEndTimes = initializeRackEndTimes();
+  calculateRackEndTimes(allBatches, rackEndTimes);
 
   // Find the first available rack at the requested time
   let selectedRack = null;
@@ -941,7 +1251,7 @@ export async function addSimulationBatch(simulationId, batchData) {
 
   for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
     const rackEndTime = rackEndTimes.get(rack) || 0;
-    const rackOven = Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+    const rackOven = getOvenFromRack(rack);
 
     // Check oven requirement
     if (
@@ -966,7 +1276,7 @@ export async function addSimulationBatch(simulationId, batchData) {
 
     for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
       const rackEndTime = rackEndTimes.get(rack) || 0;
-      const rackOven = Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+      const rackOven = getOvenFromRack(rack);
 
       // Check oven requirement
       if (
@@ -992,12 +1302,10 @@ export async function addSimulationBatch(simulationId, batchData) {
     }
 
     // Round the earliest available time to the next 20-minute increment
-    const roundToTwentyMinuteIncrement = (minutes) => {
-      const increment = 20;
-      return Math.ceil(minutes / increment) * increment;
-    };
-
-    actualStartMinutes = roundToTwentyMinuteIncrement(earliestAvailableTime);
+    actualStartMinutes = roundToTwentyMinuteIncrement(
+      earliestAvailableTime,
+      "ceil"
+    );
     selectedRack = earliestRack;
 
     // Verify the new time doesn't exceed business hours
@@ -1013,8 +1321,7 @@ export async function addSimulationBatch(simulationId, batchData) {
     throw new Error("Batch would end after business hours");
   }
 
-  const selectedOven =
-    Math.floor((selectedRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+  const selectedOven = getOvenFromRack(selectedRack);
 
   // Create new batch object
   const newBatch = {
@@ -1041,11 +1348,7 @@ export async function addSimulationBatch(simulationId, batchData) {
   simulation.batches.push(newBatch);
 
   // Sort batches by start time
-  simulation.batches.sort((a, b) => {
-    const timeA = parseTimeToMinutes(a.startTime);
-    const timeB = parseTimeToMinutes(b.startTime);
-    return timeA - timeB;
-  });
+  sortBatchesByStartTime(simulation.batches);
 
   // Update batch in database schedule
   if (simulation.scheduleId) {
@@ -1130,11 +1433,10 @@ export async function moveSimulationBatch(
   }
 
   // Round to 20-minute increment
-  const roundToTwentyMinuteIncrement = (minutes) => {
-    const increment = 20;
-    return Math.round(minutes / increment) * increment;
-  };
-  const roundedStartMinutes = roundToTwentyMinuteIncrement(newStartMinutes);
+  const roundedStartMinutes = roundToTwentyMinuteIncrement(
+    newStartMinutes,
+    "round"
+  );
 
   // Calculate new end time
   const newEndMinutes = roundedStartMinutes + batch.bakeTime;
@@ -1143,7 +1445,7 @@ export async function moveSimulationBatch(
   }
 
   // Check oven requirement
-  const newOven = Math.floor((newRack - 1) / 6) + 1;
+  const newOven = getOvenFromRack(newRack);
   if (
     batch.oven !== null &&
     batch.oven !== undefined &&
@@ -1166,11 +1468,7 @@ export async function moveSimulationBatch(
     const bStart = parseTimeToMinutes(b.startTime);
     const bEnd = parseTimeToMinutes(b.endTime);
 
-    return (
-      (roundedStartMinutes >= bStart && roundedStartMinutes < bEnd) ||
-      (newEndMinutes > bStart && newEndMinutes <= bEnd) ||
-      (roundedStartMinutes <= bStart && newEndMinutes >= bEnd)
-    );
+    return batchesOverlap(roundedStartMinutes, newEndMinutes, bStart, bEnd);
   });
 
   if (conflictingBatch) {
@@ -1381,13 +1679,9 @@ export async function createCateringOrder(simulationId, orderData) {
   }
 
   // Round pickup time to nearest 20-minute increment
-  const roundToTwentyMinuteIncrement = (minutes) => {
-    const increment = 20;
-    return Math.round(minutes / increment) * increment;
-  };
-
   const roundedPickupTime = roundToTwentyMinuteIncrement(
-    requiredAvailableMinutes
+    requiredAvailableMinutes,
+    "round"
   );
 
   // Validate 2-hour minimum notice
@@ -1435,7 +1729,8 @@ export async function createCateringOrder(simulationId, orderData) {
       bakeSpec.bakeTimeMinutes -
       (bakeSpec.coolTimeMinutes || 0);
     const roundedStartTime = roundToTwentyMinuteIncrement(
-      Math.max(BUSINESS_HOURS.START_MINUTES, requiredStartTime)
+      Math.max(BUSINESS_HOURS.START_MINUTES, requiredStartTime),
+      "round"
     );
 
     itemBatchRequirements.push({
@@ -1454,24 +1749,8 @@ export async function createCateringOrder(simulationId, orderData) {
     ...(simulation.batches || []),
     ...(simulation.completedBatches || []),
   ];
-  const rackEndTimes = new Map(); // rack -> end time
-
-  // Initialize all racks
-  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-    rackEndTimes.set(rack, 0);
-  }
-
-  // Calculate when each rack becomes available
-  allBatches.forEach((batch) => {
-    if (batch.rackPosition && batch.endTime) {
-      const batchEndTime = parseTimeToMinutes(batch.endTime);
-      const rack = batch.rackPosition;
-      const currentEndTime = rackEndTimes.get(rack) || 0;
-      if (batchEndTime > currentEndTime) {
-        rackEndTimes.set(rack, batchEndTime);
-      }
-    }
-  });
+  const rackEndTimes = initializeRackEndTimes();
+  calculateRackEndTimes(allBatches, rackEndTimes);
 
   // Allocate racks for catering batches with staggering support
   const cateringBatches = [];
@@ -1505,7 +1784,10 @@ export async function createCateringOrder(simulationId, orderData) {
       startTimeOffset <= maxStartTimeOffset
     ) {
       const tryStartTime = requiredStartTime - startTimeOffset;
-      const roundedTryStartTime = roundToTwentyMinuteIncrement(tryStartTime);
+      const roundedTryStartTime = roundToTwentyMinuteIncrement(
+        tryStartTime,
+        "round"
+      );
 
       // Try to find racks at this time
       const availableRacks = [];
@@ -1518,8 +1800,7 @@ export async function createCateringOrder(simulationId, orderData) {
           continue; // Already allocated at this time
         }
 
-        const rackOven =
-          Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+        const rackOven = getOvenFromRack(rack);
 
         // Check oven requirement
         if (requiredOven !== null && requiredOven !== rackOven) {
@@ -1547,10 +1828,11 @@ export async function createCateringOrder(simulationId, orderData) {
           const bEnd = parseTimeToMinutes(b.endTime);
 
           // Check if batches overlap
-          return (
-            (roundedTryStartTime >= bStart && roundedTryStartTime < bEnd) ||
-            (batchEndTime > bStart && batchEndTime <= bEnd) ||
-            (roundedTryStartTime <= bStart && batchEndTime >= bEnd)
+          return batchesOverlap(
+            roundedTryStartTime,
+            batchEndTime,
+            bStart,
+            bEnd
           );
         });
 
@@ -1626,8 +1908,7 @@ export async function createCateringOrder(simulationId, orderData) {
 
         const batchStart = parseTimeToMinutes(batch.startTime);
         const batchEnd = parseTimeToMinutes(batch.endTime);
-        const rackOven =
-          Math.floor((batch.rackPosition - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+        const rackOven = getOvenFromRack(batch.rackPosition);
 
         // Check if batch conflicts with our time window and oven requirement
         const conflictsWithTime =
@@ -1680,7 +1961,10 @@ export async function createCateringOrder(simulationId, orderData) {
             laterTime <=
             BUSINESS_HOURS.END_MINUTES - conflictingBatch.bakeTime
           ) {
-            const roundedLaterTime = roundToTwentyMinuteIncrement(laterTime);
+            const roundedLaterTime = roundToTwentyMinuteIncrement(
+              laterTime,
+              "round"
+            );
             const laterEndTime = roundedLaterTime + conflictingBatch.bakeTime;
 
             for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
@@ -1690,8 +1974,7 @@ export async function createCateringOrder(simulationId, orderData) {
                 continue;
               }
 
-              const rackOven =
-                Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+              const rackOven = getOvenFromRack(rack);
 
               if (batchOven !== null && batchOven !== rackOven) {
                 continue;
@@ -1706,10 +1989,11 @@ export async function createCateringOrder(simulationId, orderData) {
                 const bStart = parseTimeToMinutes(b.startTime);
                 const bEnd = parseTimeToMinutes(b.endTime);
 
-                return (
-                  (roundedLaterTime >= bStart && roundedLaterTime < bEnd) ||
-                  (laterEndTime > bStart && laterEndTime <= bEnd) ||
-                  (roundedLaterTime <= bStart && laterEndTime >= bEnd)
+                return batchesOverlap(
+                  roundedLaterTime,
+                  laterEndTime,
+                  bStart,
+                  bEnd
                 );
               });
 
@@ -1725,8 +2009,10 @@ export async function createCateringOrder(simulationId, orderData) {
           if (newRack === null) {
             const earlierTime = originalStartTime - offset;
             if (earlierTime >= BUSINESS_HOURS.START_MINUTES) {
-              const roundedEarlierTime =
-                roundToTwentyMinuteIncrement(earlierTime);
+              const roundedEarlierTime = roundToTwentyMinuteIncrement(
+                earlierTime,
+                "round"
+              );
               const earlierEndTime =
                 roundedEarlierTime + conflictingBatch.bakeTime;
 
@@ -1737,8 +2023,7 @@ export async function createCateringOrder(simulationId, orderData) {
                   continue;
                 }
 
-                const rackOven =
-                  Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+                const rackOven = getOvenFromRack(rack);
 
                 if (batchOven !== null && batchOven !== rackOven) {
                   continue;
@@ -1753,11 +2038,11 @@ export async function createCateringOrder(simulationId, orderData) {
                   const bStart = parseTimeToMinutes(b.startTime);
                   const bEnd = parseTimeToMinutes(b.endTime);
 
-                  return (
-                    (roundedEarlierTime >= bStart &&
-                      roundedEarlierTime < bEnd) ||
-                    (earlierEndTime > bStart && earlierEndTime <= bEnd) ||
-                    (roundedEarlierTime <= bStart && earlierEndTime >= bEnd)
+                  return batchesOverlap(
+                    roundedEarlierTime,
+                    earlierEndTime,
+                    bStart,
+                    bEnd
                   );
                 });
 
@@ -1789,8 +2074,7 @@ export async function createCateringOrder(simulationId, orderData) {
               (conflictingBatch.coolTime || 0)
           );
           conflictingBatch.rackPosition = newRack;
-          conflictingBatch.oven =
-            Math.floor((newRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+          conflictingBatch.oven = getOvenFromRack(newRack);
 
           // Update rack end time
           rackEndTimes.set(newRack, newStartTime + conflictingBatch.bakeTime);
@@ -1819,6 +2103,7 @@ export async function createCateringOrder(simulationId, orderData) {
       // Now try to allocate remaining batches
       if (racksFreed > 0) {
         // Rebuild rackEndTimes map after moves to reflect new batch positions
+        rackEndTimes.clear();
         for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
           rackEndTimes.set(rack, 0);
         }
@@ -1828,16 +2113,7 @@ export async function createCateringOrder(simulationId, orderData) {
           ...(simulation.batches || []),
           ...(simulation.completedBatches || []),
         ];
-        updatedAllBatches.forEach((batch) => {
-          if (batch.rackPosition && batch.endTime) {
-            const batchEndTime = parseTimeToMinutes(batch.endTime);
-            const rack = batch.rackPosition;
-            const currentEndTime = rackEndTimes.get(rack) || 0;
-            if (batchEndTime > currentEndTime) {
-              rackEndTimes.set(rack, batchEndTime);
-            }
-          }
-        });
+        calculateRackEndTimes(updatedAllBatches, rackEndTimes);
 
         // Try to allocate remaining batches
         let additionalBatchesAllocated = 0;
@@ -1848,8 +2124,10 @@ export async function createCateringOrder(simulationId, orderData) {
           startTimeOffset <= maxStartTimeOffset
         ) {
           const tryStartTime = requiredStartTime - startTimeOffset;
-          const roundedTryStartTime =
-            roundToTwentyMinuteIncrement(tryStartTime);
+          const roundedTryStartTime = roundToTwentyMinuteIncrement(
+            tryStartTime,
+            "round"
+          );
 
           const availableRacks = [];
           const batchEndTime = roundedTryStartTime + bakeTime;
@@ -1861,8 +2139,7 @@ export async function createCateringOrder(simulationId, orderData) {
               continue;
             }
 
-            const rackOven =
-              Math.floor((rack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+            const rackOven = getOvenFromRack(rack);
 
             if (requiredOven !== null && requiredOven !== rackOven) {
               continue;
@@ -1890,10 +2167,11 @@ export async function createCateringOrder(simulationId, orderData) {
               const bEnd = parseTimeToMinutes(b.endTime);
 
               // Check if batches overlap
-              return (
-                (roundedTryStartTime >= bStart && roundedTryStartTime < bEnd) ||
-                (batchEndTime > bStart && batchEndTime <= bEnd) ||
-                (roundedTryStartTime <= bStart && batchEndTime >= bEnd)
+              return batchesOverlap(
+                roundedTryStartTime,
+                batchEndTime,
+                bStart,
+                bEnd
               );
             });
 
@@ -1971,8 +2249,7 @@ export async function createCateringOrder(simulationId, orderData) {
 
   for (const batchData of cateringBatches) {
     const batchId = uuidv4();
-    const selectedOven =
-      Math.floor((batchData.rackPosition - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+    const selectedOven = getOvenFromRack(batchData.rackPosition);
 
     const newBatch = {
       batchId,
@@ -2004,11 +2281,7 @@ export async function createCateringOrder(simulationId, orderData) {
   }
 
   // Sort batches by start time
-  simulation.batches.sort((a, b) => {
-    const timeA = parseTimeToMinutes(a.startTime);
-    const timeB = parseTimeToMinutes(b.startTime);
-    return timeA - timeB;
-  });
+  sortBatchesByStartTime(simulation.batches);
 
   // Determine order status
   const shouldAutoApprove = autoApprove || simulation.autoApproveCatering;
@@ -2240,8 +2513,7 @@ export async function rejectCateringOrder(simulationId, orderId) {
       batch.availableTime = formatMinutesToTime(
         oldStartMinutes + batch.bakeTime + (batch.coolTime || 0)
       );
-      batch.oven =
-        Math.floor((movedBatch.oldRack - 1) / OVEN_CONFIG.RACKS_PER_OVEN) + 1;
+      batch.oven = getOvenFromRack(movedBatch.oldRack);
 
       // Update database
       if (simulation.scheduleId) {

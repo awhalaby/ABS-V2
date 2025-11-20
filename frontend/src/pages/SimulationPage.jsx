@@ -53,6 +53,7 @@ export default function SimulationPage() {
   const [bakeSpecs, setBakeSpecs] = useState([]);
   const [suggestedBatchesEnabled, setSuggestedBatchesEnabled] = useState(false);
   const [autoAddSuggestedBatches, setAutoAddSuggestedBatches] = useState(false);
+  const [suggestionMode, setSuggestionMode] = useState("predictive");
   const [autoApproveCatering, setAutoApproveCatering] = useState(false);
   const [cateringOrders, setCateringOrders] = useState([]);
   const [websocketConnected, setWebsocketConnected] = useState(false);
@@ -908,15 +909,69 @@ export default function SimulationPage() {
                 batches.
               </p>
             </div>
-            <button
-              onClick={handleStart}
-              disabled={
-                loading || (mode === "preset" && availableDates.length === 0)
-              }
-              className="touch-button w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:opacity-50 shadow-md active:shadow-sm"
-            >
-              {loading ? "Starting..." : "Start Simulation"}
-            </button>
+            <div className="mt-6 space-y-4">
+              <div className="border border-yellow-200 bg-yellow-50 rounded-lg p-4 space-y-3">
+                <h3 className="text-sm font-semibold text-gray-800">
+                  Suggested Batches Settings
+                </h3>
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={suggestedBatchesEnabled}
+                      onChange={(e) =>
+                        setSuggestedBatchesEnabled(e.target.checked)
+                      }
+                      className="touch-input w-5 h-5"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Show Suggested Batches
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoAddSuggestedBatches}
+                      onChange={(e) =>
+                        setAutoAddSuggestedBatches(e.target.checked)
+                      }
+                      className="touch-input w-5 h-5"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Auto-add suggestions to schedule
+                    </span>
+                  </label>
+                  <div className="flex flex-col md:col-span-2 gap-1">
+                    <label className="text-xs font-medium text-gray-600 uppercase tracking-wide">
+                      Suggestion Algorithm
+                    </label>
+                    <select
+                      value={suggestionMode}
+                      onChange={(e) => setSuggestionMode(e.target.value)}
+                      className="text-sm border border-gray-300 rounded-md px-3 py-1.5 focus:outline-none focus:ring-2 focus:ring-yellow-500 bg-white max-w-xs"
+                    >
+                      <option value="predictive">
+                        Predictive (forecast-driven)
+                      </option>
+                      <option value="reactive">Reactive (recent demand)</option>
+                    </select>
+                    <p className="text-[11px] text-gray-500">
+                      These settings apply when the simulation is running and
+                      control how batch suggestions are generated.
+                    </p>
+                  </div>
+                </div>
+              </div>
+              <button
+                onClick={handleStart}
+                disabled={
+                  loading || (mode === "preset" && availableDates.length === 0)
+                }
+                className="touch-button w-full bg-blue-600 text-white rounded-lg hover:bg-blue-700 disabled:bg-gray-400 disabled:opacity-50 shadow-md active:shadow-sm"
+              >
+                {loading ? "Starting..." : "Start Simulation"}
+              </button>
+            </div>
           </div>
         ) : (
           <div className="bg-blue-50 border border-blue-200 rounded-lg p-4 text-sm text-blue-900">
@@ -1008,36 +1063,7 @@ export default function SimulationPage() {
                   <h3 className="text-lg font-medium text-gray-900">
                     Statistics
                   </h3>
-                  <div className="flex flex-col gap-2 items-end">
-                    <label className="flex items-center gap-2 cursor-pointer">
-                      <input
-                        type="checkbox"
-                        checked={suggestedBatchesEnabled}
-                        onChange={(e) =>
-                          setSuggestedBatchesEnabled(e.target.checked)
-                        }
-                        className="touch-input w-5 h-5"
-                      />
-                      <span className="text-sm text-gray-600">
-                        Show Suggested Batches
-                      </span>
-                    </label>
-                    {suggestedBatchesEnabled && (
-                      <label className="flex items-center gap-2 cursor-pointer">
-                        <input
-                          type="checkbox"
-                          checked={autoAddSuggestedBatches}
-                          onChange={(e) =>
-                            setAutoAddSuggestedBatches(e.target.checked)
-                          }
-                          className="touch-input w-5 h-5"
-                        />
-                        <span className="text-sm text-gray-600">
-                          Auto-Add to Schedule
-                        </span>
-                      </label>
-                    )}
-                  </div>
+                  <div />
                 </div>
                 <div className="grid grid-cols-2 md:grid-cols-3 gap-4">
                   <div>
@@ -1177,6 +1203,7 @@ export default function SimulationPage() {
                 onAddBatch={handleAddSuggestedBatch}
                 enabled={suggestedBatchesEnabled}
                 autoAdd={autoAddSuggestedBatches}
+                suggestionMode={suggestionMode}
                 existingBatches={memoizedExistingBatches}
                 currentSimulationTime={simulation?.currentTime || null}
               />
