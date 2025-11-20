@@ -17,6 +17,7 @@ import {
   getCateringOrders,
   setAutoApproveCatering,
 } from "./service.js";
+import { runHeadlessSimulation } from "./headlessRunner.js";
 
 /**
  * Start a new simulation
@@ -679,6 +680,53 @@ export const setAutoApproveCateringController = asyncHandler(
     res.status(200).json({
       success: true,
       data: result,
+    });
+  }
+);
+
+/**
+ * Run headless simulation
+ * POST /api/abs/simulation/headless/run
+ */
+export const runHeadlessSimulationController = asyncHandler(
+  async (req, res) => {
+    const {
+      scheduleDate,
+      mode = "preset",
+      suggestionMode = "predictive",
+      suggestionIntervalMinutes = 30,
+      autoAddSuggestions = true,
+      maxSuggestionsPerInterval = 3,
+      minConfidencePercent = 0,
+      condensed = true, // Default to condensed for API calls
+    } = req.body;
+
+    if (!scheduleDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: "scheduleDate is required",
+        },
+      });
+    }
+
+    const report = await runHeadlessSimulation({
+      scheduleDate,
+      mode,
+      suggestionMode,
+      suggestionIntervalMinutes,
+      autoAddSuggestions,
+      maxSuggestionsPerInterval,
+      minConfidencePercent,
+      condensed,
+      logToConsole: false,
+      autoConnectDatabase: true,
+      closeDatabaseConnection: true,
+    });
+
+    res.status(200).json({
+      success: true,
+      data: report,
     });
   }
 );

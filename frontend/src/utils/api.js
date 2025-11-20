@@ -188,6 +188,8 @@ export const simulationAPI = {
     api.post(`/api/abs/simulation/${id}/catering-order/auto-approve`, {
       enabled,
     }),
+  // Headless simulation
+  runHeadless: (params) => api.post("/api/abs/simulation/headless/run", params),
 };
 
 // Inventory API

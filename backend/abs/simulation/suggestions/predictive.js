@@ -162,7 +162,7 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
     }
 
     // If we have a shortfall, suggest batches
-    if (shortfall > 5 && confidencePercent >= 50) {
+    if (shortfall > 5) {
       const batchSize = bakeSpec.capacityPerRack;
       const batchesNeeded = Math.ceil(shortfall / batchSize);
 

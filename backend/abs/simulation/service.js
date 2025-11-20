@@ -673,6 +673,57 @@ export function updateSimulation(simulationId) {
   return simulation;
 }
 
+function synchronizeSimulationClock(simulation, targetMinutes) {
+  if (!Number.isFinite(targetMinutes)) {
+    throw new Error("targetMinutes must be a finite number");
+  }
+  const effectiveSpeed =
+    simulation.speedMultiplier && simulation.speedMultiplier > 0
+      ? simulation.speedMultiplier
+      : 60;
+  const elapsedSimMinutes = targetMinutes - BUSINESS_HOURS.START_MINUTES;
+  const realMinutes = elapsedSimMinutes / effectiveSpeed;
+  const realMilliseconds = realMinutes * 60 * 1000;
+  simulation.startTime =
+    Date.now() - realMilliseconds - (simulation.pausedDuration || 0);
+  return targetMinutes;
+}
+
+/**
+ * Advance simulation instantly to a specific minute mark (headless mode helper)
+ * @param {string} simulationId
+ * @param {number} targetMinutes - Minutes from midnight to advance to
+ * @returns {SimulationState|null}
+ */
+export function advanceSimulationTo(simulationId, targetMinutes) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error(`Simulation not found: ${simulationId}`);
+  }
+  if (simulation.status !== "running") {
+    return simulation;
+  }
+  if (!Number.isFinite(targetMinutes)) {
+    throw new Error("targetMinutes must be a finite number");
+  }
+
+  const clampedTarget = Math.min(
+    Math.max(
+      targetMinutes,
+      simulation.currentTime || BUSINESS_HOURS.START_MINUTES,
+      BUSINESS_HOURS.START_MINUTES
+    ),
+    BUSINESS_HOURS.END_MINUTES
+  );
+
+  if (clampedTarget === simulation.currentTime) {
+    return simulation;
+  }
+
+  synchronizeSimulationClock(simulation, clampedTarget);
+  return updateSimulation(simulationId);
+}
+
 /**
  * Pause simulation
  * @param {string} simulationId - Simulation ID

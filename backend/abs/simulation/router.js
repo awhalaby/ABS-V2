@@ -16,6 +16,7 @@ import {
   rejectCateringOrderController,
   getCateringOrdersController,
   setAutoApproveCateringController,
+  runHeadlessSimulationController,
 } from "./controller.js";
 import {
   purchaseItemsController,
@@ -30,6 +31,9 @@ const router = express.Router();
 
 // GET /api/abs/simulation/available-dates - Get available dates for preset mode
 router.get("/available-dates", getAvailableDatesController);
+
+// POST /api/abs/simulation/headless/run - Run headless simulation
+router.post("/headless/run", runHeadlessSimulationController);
 
 // POST /api/abs/simulation/start - Start a new simulation
 router.post("/start", startSimulationController);

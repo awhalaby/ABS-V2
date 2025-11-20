@@ -6,6 +6,7 @@ import SchedulePage from "./pages/SchedulePage.jsx";
 import BakeSpecsPage from "./pages/BakeSpecsPage.jsx";
 import SimulationPage from "./pages/SimulationPage.jsx";
 import InventoryPage from "./pages/InventoryPage.jsx";
+import HeadlessSimulationPage from "./pages/HeadlessSimulationPage.jsx";
 import BackendConfig from "./components/common/BackendConfig.jsx";
 
 function App() {
@@ -70,6 +71,12 @@ function App() {
                   >
                     Inventory
                   </Link>
+                  <Link
+                    to="/headless-simulation"
+                    className="border-transparent text-gray-500 hover:border-gray-300 hover:text-gray-700 inline-flex items-center px-1 pt-1 border-b-2 text-sm font-medium"
+                  >
+                    Headless Sim
+                  </Link>
                 </div>
               </div>
             </div>
@@ -86,6 +93,10 @@ function App() {
             <Route path="/bakespecs" element={<BakeSpecsPage />} />
             <Route path="/simulation" element={<SimulationPage />} />
             <Route path="/inventory" element={<InventoryPage />} />
+            <Route
+              path="/headless-simulation"
+              element={<HeadlessSimulationPage />}
+            />
           </Routes>
         </main>
 
