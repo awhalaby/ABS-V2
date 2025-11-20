@@ -380,7 +380,7 @@ export async function runHeadlessSimulation(options = {}) {
     minConfidencePercent = 0,
     logToConsole = true,
     autoConnectDatabase = true,
-    closeDatabaseConnection = true,
+    closeDatabaseConnection = false, // Default to false for safety (don't kill server connection)
     mongodbUri = DEFAULT_MONGODB_URI,
     condensed = true, // New option: return condensed report
   } = options;
@@ -518,10 +518,6 @@ export async function runHeadlessSimulation(options = {}) {
     logReport(report);
   }
 
-  if (closeDatabaseConnection) {
-    await shutdownDatabaseConnection();
-  }
-
   return report;
 }
 
@@ -556,17 +552,19 @@ function parseCliArgs(argv) {
 
 async function runFromCli() {
   const options = parseCliArgs(process.argv.slice(2));
+  // When running from CLI, default to closing the connection unless explicitly disabled
+  if (options.closeDatabaseConnection === undefined) {
+    options.closeDatabaseConnection = true;
+  }
+
   try {
     const report = await runHeadlessSimulation(options);
     if (options.logJson) {
       console.log(JSON.stringify(report, null, 2));
     }
-    await closeDatabase();
   } catch (error) {
     console.error("Headless simulation failed:", error);
     process.exitCode = 1;
-  } finally {
-    await shutdownDatabaseConnection();
   }
 }
 

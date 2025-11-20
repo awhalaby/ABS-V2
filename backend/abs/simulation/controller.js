@@ -720,8 +720,8 @@ export const runHeadlessSimulationController = asyncHandler(
       minConfidencePercent,
       condensed,
       logToConsole: false,
-      autoConnectDatabase: true,
-      closeDatabaseConnection: true,
+      autoConnectDatabase: false, // Don't reconnect if already connected
+      closeDatabaseConnection: false, // CRITICAL: Don't close DB connection in API mode
     });
 
     res.status(200).json({

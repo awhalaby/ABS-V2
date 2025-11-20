@@ -107,10 +107,14 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
         : actualQuantity > 0
         ? 1.5
         : 1.0; // If no expected but we have actual, assume 1.5x
+    const adjustedConsumptionRatio = Math.min(
+      1.5,
+      Math.max(0.5, consumptionRatio)
+    );
 
     // Projected remaining demand based on consumption rate
     const projectedRemainingDemand =
-      remainingExpected * Math.max(1.0, consumptionRatio);
+      remainingExpected * adjustedConsumptionRatio;
 
     // Calculate total needed: projected remaining demand + safety buffer
     const restockThreshold = bakeSpec.restockThreshold || 20;
@@ -199,7 +203,7 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
       const batchAvailableTime = roundedStartTime + bakeTime + coolTime;
 
       // Don't suggest batches that would be available within an hour of closing
-      const ONE_HOUR_BEFORE_CLOSING = BUSINESS_HOURS.END_MINUTES - 60;
+      const ONE_HOUR_BEFORE_CLOSING = BUSINESS_HOURS.END_MINUTES - 100;
       if (batchAvailableTime > ONE_HOUR_BEFORE_CLOSING) {
         // Batch would be available too close to closing, skip suggesting
         return; // Skip to next item
