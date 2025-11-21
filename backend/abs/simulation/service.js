@@ -15,6 +15,11 @@ import { getOrdersByDateRange } from "../../orders/repository.js";
 import { toBusinessTime } from "../../config/timezone.js";
 import { generateSchedule, getDefaultScheduleParams } from "../service.js";
 import { getForecast } from "../../forecast/service.js";
+import {
+  calculatePredictiveSuggestedBatches,
+  calculatePredictiveRemovalCandidates,
+} from "./suggestions/predictive.js";
+import { calculateReactiveSuggestedBatches } from "./suggestions/reactive.js";
 
 /**
  * Simulation Service - Runs schedule simulations in real-time
@@ -22,6 +27,9 @@ import { getForecast } from "../../forecast/service.js";
 
 // Active simulations storage (in production, use Redis or database)
 const activeSimulations = new Map();
+
+const AUTO_REMOVAL_DEFAULT_INTERVAL = 10; // minutes
+const AUTO_REMOVAL_DEFAULT_MAX = 2;
 
 /**
  * Helper functions for batch scheduling operations
@@ -108,14 +116,6 @@ function sortBatchesByStartTime(batches) {
   });
 }
 
-const CONFIDENCE_TARGET_UNITS = 50;
-const REACTIVE_WINDOW_MINUTES = 60;
-const REACTIVE_MIN_OBSERVED_UNITS = 10;
-const REACTIVE_MIN_CONSUMPTION_RATE = 0.1;
-const REACTIVE_DEPLETION_THRESHOLD_MINUTES = 90;
-const REACTIVE_TARGET_BUFFER_MINUTES = 180;
-const REACTIVE_CONFIDENCE_TARGET_UNITS = 30;
-
 /**
  * Simulation state
  */
@@ -137,6 +137,25 @@ export class SimulationState {
 
     // Legacy inventory count for compatibility (derived from inventoryUnits)
     this.inventory = new Map(); // itemGuid -> quantity (computed from inventoryUnits)
+
+    // Cached bake specs map for predictive calculations
+    this.bakeSpecMap = null;
+
+    // Auto-removal configuration
+    this.autoRemoveSurplusBatches = Boolean(config.autoRemoveSurplusBatches);
+    const intervalValue = Number(config.autoRemoveIntervalMinutes);
+    this.autoRemoveIntervalMinutes =
+      Number.isFinite(intervalValue) && intervalValue > 0
+        ? intervalValue
+        : AUTO_REMOVAL_DEFAULT_INTERVAL;
+    const maxRemovalValue = Number(config.autoRemoveMaxRemovals);
+    this.autoRemoveMaxRemovals =
+      Number.isFinite(maxRemovalValue) && maxRemovalValue > 0
+        ? maxRemovalValue
+        : AUTO_REMOVAL_DEFAULT_MAX;
+    this.lastAutoRemovalCheck = BUSINESS_HOURS.START_MINUTES;
+    this.autoRemoveInFlight = false;
+    this.autoRemovalRuns = [];
 
     // Batch tracking
     this.batches = [];
@@ -221,6 +240,9 @@ export async function startSimulation(config) {
     speedMultiplier = 60,
     mode = "manual",
     forecastScales = null,
+    autoRemoveSurplusBatches = false,
+    autoRemoveIntervalMinutes = AUTO_REMOVAL_DEFAULT_INTERVAL,
+    autoRemoveMaxRemovals = AUTO_REMOVAL_DEFAULT_MAX,
   } = config;
 
   if (!scheduleDate) {
@@ -389,6 +411,9 @@ export async function startSimulation(config) {
     speedMultiplier,
     mode,
     presetOrders,
+    autoRemoveSurplusBatches,
+    autoRemoveIntervalMinutes,
+    autoRemoveMaxRemovals,
   });
 
   // Sum total item quantities (not count of records)
@@ -413,6 +438,7 @@ export async function startSimulation(config) {
     startedAt: null,
     pulledAt: null,
     availableAt: null,
+    origin: batch.origin || "schedule",
   }));
 
   // Sort batches by start time
@@ -451,6 +477,41 @@ export function updateSimulation(simulationId) {
     simulation.currentTime = BUSINESS_HOURS.END_MINUTES;
     simulation.addEvent("simulation_completed", "Simulation completed");
     return simulation;
+  }
+
+  // Auto-remove surplus batches on interval if enabled
+  if (
+    simulation.autoRemoveSurplusBatches &&
+    !simulation.autoRemoveInFlight &&
+    simulation.status === "running"
+  ) {
+    const intervalMinutes =
+      simulation.autoRemoveIntervalMinutes || AUTO_REMOVAL_DEFAULT_INTERVAL;
+    const lastCheck =
+      simulation.lastAutoRemovalCheck ?? BUSINESS_HOURS.START_MINUTES;
+    if (
+      Number.isFinite(simulation.currentTime) &&
+      simulation.currentTime - lastCheck >= intervalMinutes
+    ) {
+      simulation.lastAutoRemovalCheck = simulation.currentTime;
+      simulation.autoRemoveInFlight = true;
+      autoRemoveExcessBatches(simulation.id, {
+        maxRemovals: simulation.autoRemoveMaxRemovals,
+      })
+        .catch((error) => {
+          console.error("Auto-removal execution failed:", error);
+          simulation.addEvent(
+            "batch_auto_remove_error",
+            `Auto-removal run failed: ${error.message || error}`,
+            {
+              error: error?.message || String(error),
+            }
+          );
+        })
+        .finally(() => {
+          simulation.autoRemoveInFlight = false;
+        });
+    }
   }
 
   // Process batches
@@ -679,6 +740,57 @@ export function updateSimulation(simulationId) {
   return simulation;
 }
 
+function synchronizeSimulationClock(simulation, targetMinutes) {
+  if (!Number.isFinite(targetMinutes)) {
+    throw new Error("targetMinutes must be a finite number");
+  }
+  const effectiveSpeed =
+    simulation.speedMultiplier && simulation.speedMultiplier > 0
+      ? simulation.speedMultiplier
+      : 60;
+  const elapsedSimMinutes = targetMinutes - BUSINESS_HOURS.START_MINUTES;
+  const realMinutes = elapsedSimMinutes / effectiveSpeed;
+  const realMilliseconds = realMinutes * 60 * 1000;
+  simulation.startTime =
+    Date.now() - realMilliseconds - (simulation.pausedDuration || 0);
+  return targetMinutes;
+}
+
+/**
+ * Advance simulation instantly to a specific minute mark (headless mode helper)
+ * @param {string} simulationId
+ * @param {number} targetMinutes - Minutes from midnight to advance to
+ * @returns {SimulationState|null}
+ */
+export function advanceSimulationTo(simulationId, targetMinutes) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    throw new Error(`Simulation not found: ${simulationId}`);
+  }
+  if (simulation.status !== "running") {
+    return simulation;
+  }
+  if (!Number.isFinite(targetMinutes)) {
+    throw new Error("targetMinutes must be a finite number");
+  }
+
+  const clampedTarget = Math.min(
+    Math.max(
+      targetMinutes,
+      simulation.currentTime || BUSINESS_HOURS.START_MINUTES,
+      BUSINESS_HOURS.START_MINUTES
+    ),
+    BUSINESS_HOURS.END_MINUTES
+  );
+
+  if (clampedTarget === simulation.currentTime) {
+    return simulation;
+  }
+
+  synchronizeSimulationClock(simulation, clampedTarget);
+  return updateSimulation(simulationId);
+}
+
 /**
  * Pause simulation
  * @param {string} simulationId - Simulation ID
@@ -762,447 +874,123 @@ export function getAllSimulations() {
 /**
  * Calculate suggested batches based on actual vs expected orders
  * @param {string} simulationId - Simulation ID
+ * @param {Object} options - Options object
+ * @param {string} options.mode - Algorithm mode: 'predictive' or 'reactive' (default: 'predictive')
  * @returns {Promise<Array>} Array of suggested batch objects
  */
 export async function calculateSuggestedBatches(simulationId, options = {}) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return [];
+  }
+
   const mode =
     typeof options.mode === "string"
       ? options.mode.toLowerCase()
       : "predictive";
+
   if (mode === "reactive") {
-    return calculateReactiveSuggestedBatches(simulationId);
+    return calculateReactiveSuggestedBatches(simulation);
   }
-  return calculatePredictiveSuggestedBatches(simulationId);
+  return calculatePredictiveSuggestedBatches(simulation);
 }
 
-async function calculatePredictiveSuggestedBatches(simulationId) {
+/**
+ * Automatically remove excess scheduled batches using predictive surplus logic
+ * @param {string} simulationId - Simulation ID
+ * @param {Object} options - Options object
+ * @param {string} options.mode - Algorithm mode (currently supports 'predictive')
+ * @param {number} options.maxRemovals - Max batches to remove in a single run
+ * @returns {Promise<Object>} Result summary
+ */
+export async function autoRemoveExcessBatches(simulationId, options = {}) {
   const simulation = activeSimulations.get(simulationId);
   if (!simulation) {
-    return [];
+    return { removedBatches: [], candidates: [] };
   }
 
-  const suggestedBatches = [];
-  const currentTime = simulation.currentTime;
-  const timeIntervalForecast = simulation.timeIntervalForecast || [];
-  // Handle both Map and Array formats for processedOrdersByItem
-  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
-  const processedOrdersMap =
-    processedOrdersRaw instanceof Map
-      ? processedOrdersRaw
-      : new Map(
-          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
-            (item) => [item.itemGuid, item]
-          )
-        );
-  const inventory = simulation.inventory || new Map();
+  const mode =
+    typeof options.mode === "string"
+      ? options.mode.toLowerCase()
+      : "predictive";
 
-  // Get bake specs for all items
-  const bakeSpecs = await getBakeSpecs();
-  const bakeSpecMap = new Map();
-  bakeSpecs.forEach((spec) => {
-    bakeSpecMap.set(spec.itemGuid, spec);
-  });
-
-  // Group forecast by itemGuid and time interval
-  const forecastByItem = new Map();
-  timeIntervalForecast.forEach((forecast) => {
-    const itemGuid = forecast.itemGuid;
-    if (!itemGuid) return;
-
-    if (!forecastByItem.has(itemGuid)) {
-      forecastByItem.set(itemGuid, []);
-    }
-    forecastByItem.get(itemGuid).push(forecast);
-  });
-
-  // Process each item that has forecast data
-  forecastByItem.forEach((itemForecast, itemGuid) => {
-    const bakeSpec = bakeSpecMap.get(itemGuid);
-    if (!bakeSpec) return;
-
-    // Get actual orders processed so far
-    const processedItem = processedOrdersMap.get(itemGuid);
-
-    const actualQuantity = processedItem?.totalQuantity || 0;
-
-    // Calculate expected quantity up to current time
-    let expectedQuantity = 0;
-    itemForecast.forEach((forecast) => {
-      if (forecast.timeInterval <= currentTime) {
-        expectedQuantity += forecast.forecast || 0;
-      }
-    });
-
-    // Calculate remaining expected quantity for rest of day
-    let remainingExpected = 0;
-    itemForecast.forEach((forecast) => {
-      if (forecast.timeInterval > currentTime) {
-        remainingExpected += forecast.forecast || 0;
-      }
-    });
-
-    // Calculate current inventory
-    const currentInventory = inventory.get(itemGuid) || 0;
-
-    // Get parMax from bake spec (Option G: cap shortfall at parMax to prevent waste)
-    const parMax =
-      bakeSpec.parMax !== null && bakeSpec.parMax !== undefined
-        ? bakeSpec.parMax
-        : null;
-
-    // Calculate consumption rate (actual vs expected)
-    // If we've consumed more than expected, adjust the remaining forecast
-    const consumptionRatio =
-      expectedQuantity > 0
-        ? actualQuantity / expectedQuantity
-        : actualQuantity > 0
-        ? 1.5
-        : 1.0; // If no expected but we have actual, assume 1.5x
-
-    // Projected remaining demand based on consumption rate
-    const projectedRemainingDemand =
-      remainingExpected * Math.max(1.0, consumptionRatio);
-
-    // Calculate total needed: projected remaining demand + safety buffer
-    const restockThreshold = bakeSpec.restockThreshold || 20;
-    const totalNeeded = projectedRemainingDemand;
-
-    const elapsedMinutes = Math.max(
-      0,
-      currentTime - BUSINESS_HOURS.START_MINUTES
-    );
-    const observationStartTime = formatMinutesToTime(
-      BUSINESS_HOURS.START_MINUTES
-    );
-    const observationEndTime = formatMinutesToTime(currentTime);
-    const confidenceRatio = Math.min(
-      1,
-      expectedQuantity / CONFIDENCE_TARGET_UNITS
-    );
-    const confidencePercent = Math.round(confidenceRatio * 100);
-
-    console.log(
-      `[SuggestedBatches][Predictive] Confidence for ${
-        bakeSpec.displayName || itemGuid
-      }: ${confidencePercent}% based on ${expectedQuantity} expected units from ${observationStartTime} to ${observationEndTime} (${elapsedMinutes} minutes observed). Target volume for 100% confidence: ${CONFIDENCE_TARGET_UNITS} units.`
-    );
-
-    // Calculate how much inventory we'll have after current batches complete
-    // Count batches that will become available after current time
-    let futureInventory = currentInventory;
-    const allBatches = [
-      ...(simulation.batches || []),
-      ...(simulation.completedBatches || []),
-    ];
-    allBatches.forEach((batch) => {
-      if (batch.itemGuid === itemGuid && batch.availableTime) {
-        const availableTime = parseTimeToMinutes(batch.availableTime);
-        if (availableTime > currentTime && batch.status !== "available") {
-          futureInventory += batch.quantity || 0;
-        }
-      }
-    });
-
-    // Calculate shortfall (Option G: cap at parMax if set)
-    let shortfall = Math.max(0, totalNeeded - futureInventory);
-
-    // If parMax is set, cap shortfall to prevent exceeding parMax
-    if (parMax !== null && futureInventory < parMax) {
-      const maxAllowedShortfall = parMax - futureInventory;
-      shortfall = Math.min(shortfall, maxAllowedShortfall);
-    }
-
-    // If we have a shortfall, suggest batches
-    if (shortfall > 5) {
-      const batchSize = bakeSpec.capacityPerRack;
-      const batchesNeeded = Math.ceil(shortfall / batchSize);
-
-      // Calculate when batches should be available (based on when we'll run out)
-      // Estimate time until we run out based on consumption rate
-      const minutesUntilShortfall =
-        remainingExpected > 0 && consumptionRatio > 0
-          ? Math.max(
-              60,
-              Math.min(
-                300,
-                remainingExpected / consumptionRatio / (consumptionRatio * 10)
-              )
-            ) // Rough estimate
-          : 120; // Default to 2 hours from now
-
-      const targetAvailableTime = currentTime + minutesUntilShortfall;
-
-      // Calculate start time (accounting for bake time + cool time)
-      const bakeTime = bakeSpec.bakeTimeMinutes;
-      const coolTime = bakeSpec.coolTimeMinutes || 0;
-      const targetStartTime = Math.max(
-        currentTime + 20, // At least 20 minutes from now
-        targetAvailableTime - bakeTime - coolTime
-      );
-
-      // Round to next 20-minute increment
-      const roundedStartTime = roundToTwentyMinuteIncrement(
-        targetStartTime,
-        "ceil"
-      );
-
-      // Calculate when batch would be available (start + bake + cool)
-      const batchAvailableTime = roundedStartTime + bakeTime + coolTime;
-
-      // Don't suggest batches that would be available within an hour of closing
-      const ONE_HOUR_BEFORE_CLOSING = BUSINESS_HOURS.END_MINUTES - 60;
-      if (batchAvailableTime > ONE_HOUR_BEFORE_CLOSING) {
-        // Batch would be available too close to closing, skip suggesting
-        return; // Skip to next item
-      }
-
-      // Create suggested batches (all at the same time)
-      for (let i = 0; i < batchesNeeded; i++) {
-        const batchStartTime = roundedStartTime; // All batches start at the same time
-
-        if (batchStartTime + bakeTime <= BUSINESS_HOURS.END_MINUTES) {
-          suggestedBatches.push({
-            batchId: `suggested-${itemGuid}-${Date.now()}-${i}`,
-            itemGuid,
-            displayName: bakeSpec.displayName || itemGuid,
-            quantity: batchSize,
-            bakeTime,
-            coolTime,
-            oven: bakeSpec.oven !== undefined ? bakeSpec.oven : null,
-            freshWindowMinutes: bakeSpec.freshWindowMinutes,
-            restockThreshold,
-            rackPosition: null, // Will be assigned when added to schedule
-            startTime: formatMinutesToTime(batchStartTime),
-            endTime: formatMinutesToTime(batchStartTime + bakeTime),
-            availableTime: formatMinutesToTime(
-              batchStartTime + bakeTime + coolTime
-            ),
-            status: "suggested",
-            algorithm: "predictive",
-            reason: {
-              algorithm: "predictive",
-              actualQuantity,
-              expectedQuantity,
-              currentInventory,
-              futureInventory,
-              projectedRemainingDemand,
-              shortfall,
-              parMax,
-              consumptionRatio: Math.round(consumptionRatio * 100) / 100,
-              confidencePercent,
-              confidenceDetails: {
-                expectedUnitsObserved: expectedQuantity,
-                observedUnits: expectedQuantity,
-                observationUnitsLabel: "expected",
-                targetUnitsForFullConfidence: CONFIDENCE_TARGET_UNITS,
-                observationWindowStart: observationStartTime,
-                observationWindowEnd: observationEndTime,
-                observationMinutes: elapsedMinutes,
-              },
-            },
-          });
-        }
-      }
-    }
-  });
-
-  return suggestedBatches;
-}
-
-async function calculateReactiveSuggestedBatches(simulationId) {
-  const simulation = activeSimulations.get(simulationId);
-  if (!simulation) {
-    return [];
+  if (mode !== "predictive") {
+    return { removedBatches: [], candidates: [] };
   }
 
-  const currentTime = simulation.currentTime;
-  const inventory =
-    simulation.inventory instanceof Map
-      ? simulation.inventory
-      : new Map(Object.entries(simulation.inventory || {}));
-  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
-  const processedOrdersMap =
-    processedOrdersRaw instanceof Map
-      ? processedOrdersRaw
-      : new Map(
-          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
-            (item) => [item.itemGuid, item]
-          )
-        );
-
-  const bakeSpecs = await getBakeSpecs();
-  const bakeSpecMap = new Map();
-  bakeSpecs.forEach((spec) => {
-    bakeSpecMap.set(spec.itemGuid, spec);
-  });
-
-  const allBatches = [
-    ...(simulation.batches || []),
-    ...(simulation.completedBatches || []),
-  ];
-
-  const observationStartMinutes = Math.max(
-    BUSINESS_HOURS.START_MINUTES,
-    currentTime - REACTIVE_WINDOW_MINUTES
+  const candidates = await calculatePredictiveRemovalCandidates(
+    simulation,
+    options
   );
-  const observationEndTime = formatMinutesToTime(currentTime);
-  const observationStartTime = formatMinutesToTime(observationStartMinutes);
-  const observedMinutes = Math.max(1, currentTime - observationStartMinutes);
 
-  const suggestions = [];
+  const runTimestamp = Number.isFinite(simulation.currentTime)
+    ? simulation.currentTime
+    : BUSINESS_HOURS.START_MINUTES;
+  const runEntry = {
+    atMinutes: simulation.currentTime ?? null,
+    atTime: formatMinutesToTime(runTimestamp),
+    evaluated: candidates.length,
+    removed: [],
+  };
 
-  processedOrdersMap.forEach((processedItem, itemGuid) => {
-    if (!itemGuid) {
-      return;
+  const maxRemovals = Number.isFinite(options.maxRemovals)
+    ? Math.max(0, options.maxRemovals)
+    : 3;
+
+  const removedBatches = [];
+  for (const candidate of candidates) {
+    if (removedBatches.length >= maxRemovals) {
+      break;
     }
-    const bakeSpec = bakeSpecMap.get(itemGuid);
-    if (!bakeSpec) {
-      return;
-    }
 
-    const currentInventory = inventory.get(itemGuid) || 0;
-    const orders = processedItem?.orders || [];
-    let observedUnits = 0;
-    orders.forEach((order) => {
-      const orderMinutes = parseTimeToMinutes(order.time);
-      if (
-        orderMinutes !== null &&
-        orderMinutes >= observationStartMinutes &&
-        orderMinutes <= currentTime
-      ) {
-        observedUnits += order.quantity || 0;
+    try {
+      const updatedSimulation = await deleteSimulationBatch(
+        simulationId,
+        candidate.batchId
+      );
+
+      if (updatedSimulation) {
+        updatedSimulation.addEvent(
+          "batch_auto_removed",
+          `Auto-removed batch: ${candidate.displayName || candidate.itemGuid}`,
+          {
+            batchId: candidate.batchId,
+            itemGuid: candidate.itemGuid,
+            reason: candidate.reason,
+            quantity: candidate.quantity,
+            startTime: candidate.startTime,
+            rackPosition: candidate.rackPosition,
+            origin: candidate.origin,
+          }
+        );
       }
-    });
 
-    if (observedUnits < REACTIVE_MIN_OBSERVED_UNITS) {
-      return;
-    }
-
-    const consumptionRate = observedUnits / observedMinutes;
-    if (consumptionRate < REACTIVE_MIN_CONSUMPTION_RATE) {
-      return;
-    }
-
-    const futureSupplyWithinThreshold = allBatches.reduce((sum, batch) => {
-      if (batch.itemGuid !== itemGuid || !batch.availableTime) {
-        return sum;
-      }
-      const availableMinutes = parseTimeToMinutes(batch.availableTime);
-      if (
-        availableMinutes !== null &&
-        availableMinutes > currentTime &&
-        availableMinutes <= currentTime + REACTIVE_DEPLETION_THRESHOLD_MINUTES
-      ) {
-        return sum + (batch.quantity || 0);
-      }
-      return sum;
-    }, 0);
-
-    const netInventoryWithinThreshold =
-      currentInventory + futureSupplyWithinThreshold;
-    const minutesUntilShortage =
-      consumptionRate > 0
-        ? netInventoryWithinThreshold / consumptionRate
-        : Infinity;
-
-    if (minutesUntilShortage > REACTIVE_DEPLETION_THRESHOLD_MINUTES) {
-      return;
-    }
-
-    const futureSupplyWithinBuffer = allBatches.reduce((sum, batch) => {
-      if (batch.itemGuid !== itemGuid || !batch.availableTime) {
-        return sum;
-      }
-      const availableMinutes = parseTimeToMinutes(batch.availableTime);
-      if (
-        availableMinutes !== null &&
-        availableMinutes > currentTime &&
-        availableMinutes <= currentTime + REACTIVE_TARGET_BUFFER_MINUTES
-      ) {
-        return sum + (batch.quantity || 0);
-      }
-      return sum;
-    }, 0);
-
-    const projectedInventory = currentInventory + futureSupplyWithinBuffer;
-    const targetInventory = consumptionRate * REACTIVE_TARGET_BUFFER_MINUTES;
-    let shortfall = Math.max(0, targetInventory - projectedInventory);
-
-    if (shortfall < bakeSpec.capacityPerRack * 0.5) {
-      return;
-    }
-
-    const batchSize = bakeSpec.capacityPerRack;
-    const batchesNeeded = Math.ceil(shortfall / batchSize);
-
-    const startMinutes = roundToTwentyMinuteIncrement(
-      Math.max(currentTime + 10, BUSINESS_HOURS.START_MINUTES),
-      "ceil"
-    );
-    const bakeMinutes = bakeSpec.bakeTimeMinutes || 0;
-    const coolMinutes = bakeSpec.coolTimeMinutes || 0;
-    const availableMinutes = startMinutes + bakeMinutes + coolMinutes;
-    if (availableMinutes > BUSINESS_HOURS.END_MINUTES) {
-      return;
-    }
-
-    const confidencePercent = Math.round(
-      Math.min(1, observedUnits / REACTIVE_CONFIDENCE_TARGET_UNITS) * 100
-    );
-
-    console.log(
-      `[SuggestedBatches][Reactive] ${
-        bakeSpec.displayName || itemGuid
-      } confidence ${confidencePercent}% with ${observedUnits} actual units from ${observationStartTime} to ${observationEndTime} (${observedMinutes} min).`
-    );
-
-    for (let i = 0; i < batchesNeeded; i++) {
-      const batchId = `reactive-${itemGuid}-${Date.now()}-${i}`;
-      suggestions.push({
-        batchId,
-        itemGuid,
-        displayName: bakeSpec.displayName || itemGuid,
-        quantity: batchSize,
-        bakeTime: bakeMinutes,
-        coolTime: coolMinutes,
-        oven:
-          bakeSpec.oven !== undefined && bakeSpec.oven !== null
-            ? bakeSpec.oven
-            : null,
-        freshWindowMinutes: bakeSpec.freshWindowMinutes,
-        restockThreshold: bakeSpec.restockThreshold || 20,
-        rackPosition: null,
-        startTime: formatMinutesToTime(startMinutes),
-        endTime: formatMinutesToTime(startMinutes + bakeMinutes),
-        availableTime: formatMinutesToTime(availableMinutes),
-        status: "suggested",
-        algorithm: "reactive",
-        reason: {
-          algorithm: "reactive",
-          currentInventory,
-          consumptionRate: Math.round(consumptionRate * 100) / 100,
-          observedUnits,
-          windowMinutes: observedMinutes,
-          minutesUntilShortage: Math.round(minutesUntilShortage),
-          targetBufferMinutes: REACTIVE_TARGET_BUFFER_MINUTES,
-          futureSupplyWithinBuffer,
-          projectedInventory,
-          shortfall,
-          confidencePercent,
-          confidenceDetails: {
-            observedUnits,
-            observationUnitsLabel: "actual",
-            observationWindowStart: observationStartTime,
-            observationWindowEnd: observationEndTime,
-            observationMinutes: observedMinutes,
-            targetUnitsForFullConfidence: REACTIVE_CONFIDENCE_TARGET_UNITS,
-          },
-        },
+      removedBatches.push(candidate);
+      runEntry.removed.push({
+        batchId: candidate.batchId,
+        itemGuid: candidate.itemGuid,
+        displayName: candidate.displayName,
+        quantity: candidate.quantity,
+        startTime: candidate.startTime,
+        reason: candidate.reason,
       });
+    } catch (error) {
+      console.error("Failed to auto-remove batch:", error);
+      simulation.addEvent(
+        "batch_auto_remove_error",
+        `Failed to auto-remove batch ${candidate.batchId}: ${error.message}`,
+        {
+          batchId: candidate.batchId,
+          error: error.message,
+        }
+      );
     }
-  });
+  }
 
-  return suggestions;
+  simulation.autoRemovalRuns = simulation.autoRemovalRuns || [];
+  simulation.autoRemovalRuns.push(runEntry);
+
+  return { removedBatches, candidates };
 }
 
 /**
@@ -1236,49 +1024,43 @@ export async function addSimulationBatch(simulationId, batchData) {
     "ceil"
   );
 
-  // Find an available rack at this time
-  // Check all racks to find one that's free
+  // Find an available rack/time slot using full overlap checks instead of a simple
+  // "busy until latest end time" heuristic so we can use gaps in the schedule.
   const allBatches = [
     ...(simulation.batches || []),
     ...(simulation.completedBatches || []),
   ];
-  const rackEndTimes = initializeRackEndTimes();
-  calculateRackEndTimes(allBatches, rackEndTimes);
 
-  // Find the first available rack at the requested time
-  let selectedRack = null;
-  let actualStartMinutes = roundedStartMinutes;
+  /**
+   * Check if a given rack has any batch that overlaps with the candidate window.
+   */
+  function rackHasConflict(rack, candidateStart, candidateEnd) {
+    return allBatches.some((b) => {
+      if (!b.rackPosition || b.rackPosition !== rack) return false;
+      if (!b.startTime || !b.endTime) return false;
 
-  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-    const rackEndTime = rackEndTimes.get(rack) || 0;
-    const rackOven = getOvenFromRack(rack);
+      const bStart = parseTimeToMinutes(b.startTime);
+      const bEnd = parseTimeToMinutes(b.endTime);
 
-    // Check oven requirement
-    if (
-      batchData.oven !== null &&
-      batchData.oven !== undefined &&
-      batchData.oven !== rackOven
-    ) {
-      continue;
-    }
-
-    // Check if rack is available at the rounded start time
-    if (rackEndTime <= roundedStartMinutes) {
-      selectedRack = rack;
-      break;
-    }
+      return batchesOverlap(candidateStart, candidateEnd, bStart, bEnd);
+    });
   }
 
-  // If no rack available at requested time, find the next available time slot
-  if (!selectedRack) {
-    let earliestAvailableTime = Infinity;
-    let earliestRack = null;
+  /**
+   * Try to find a rack that is free for the given start time.
+   */
+  function findRackAtTime(candidateStart) {
+    const candidateEnd = candidateStart + batchData.bakeTime;
+
+    // Must finish within business hours
+    if (candidateEnd > BUSINESS_HOURS.END_MINUTES) {
+      return null;
+    }
 
     for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-      const rackEndTime = rackEndTimes.get(rack) || 0;
       const rackOven = getOvenFromRack(rack);
 
-      // Check oven requirement
+      // Respect oven requirement
       if (
         batchData.oven !== null &&
         batchData.oven !== undefined &&
@@ -1287,41 +1069,54 @@ export async function addSimulationBatch(simulationId, batchData) {
         continue;
       }
 
-      // Find when this rack becomes available
-      const availableTime = rackEndTime;
-      if (availableTime < earliestAvailableTime) {
-        earliestAvailableTime = availableTime;
-        earliestRack = rack;
+      // Skip racks that have overlapping batches at this time
+      if (rackHasConflict(rack, candidateStart, candidateEnd)) {
+        continue;
       }
+
+      return { rack, start: candidateStart, end: candidateEnd };
     }
 
-    if (!earliestRack) {
-      throw new Error(
-        "No available rack found (all racks may be restricted by oven requirements)"
-      );
-    }
+    return null;
+  }
 
-    // Round the earliest available time to the next 20-minute increment
-    actualStartMinutes = roundToTwentyMinuteIncrement(
-      earliestAvailableTime,
-      "ceil"
-    );
-    selectedRack = earliestRack;
+  // First try at the requested (rounded) start time
+  let allocation = findRackAtTime(roundedStartMinutes);
 
-    // Verify the new time doesn't exceed business hours
-    const newEndMinutes = actualStartMinutes + batchData.bakeTime;
-    if (newEndMinutes > BUSINESS_HOURS.END_MINUTES) {
-      throw new Error("No available time slot found before business hours end");
+  // If no rack available at the requested time, search forward in 20-minute increments
+  if (!allocation) {
+    const latestStart = BUSINESS_HOURS.END_MINUTES - batchData.bakeTime;
+    let searchStart = roundedStartMinutes + 20;
+
+    while (!allocation && searchStart <= latestStart) {
+      // Ensure we're aligned to 20-minute slots
+      const alignedStart = roundToTwentyMinuteIncrement(searchStart, "ceil");
+      if (alignedStart > latestStart) break;
+
+      allocation = findRackAtTime(alignedStart);
+      searchStart = alignedStart + 20;
     }
   }
 
-  // Calculate end time based on actual start time
-  const endMinutes = actualStartMinutes + batchData.bakeTime;
-  if (endMinutes > BUSINESS_HOURS.END_MINUTES) {
-    throw new Error("Batch would end after business hours");
+  if (!allocation) {
+    throw new Error("No available time slot found before business hours end");
   }
+
+  const {
+    rack: selectedRack,
+    start: actualStartMinutes,
+    end: endMinutes,
+  } = allocation;
 
   const selectedOven = getOvenFromRack(selectedRack);
+
+  const origin =
+    typeof batchData.origin === "string" && batchData.origin.trim().length > 0
+      ? batchData.origin.trim()
+      : typeof batchData.algorithm === "string" &&
+        batchData.algorithm.trim().length > 0
+      ? batchData.algorithm.trim()
+      : "manual";
 
   // Create new batch object
   const newBatch = {
@@ -1342,6 +1137,7 @@ export async function addSimulationBatch(simulationId, batchData) {
     startedAt: null,
     pulledAt: null,
     availableAt: null,
+    origin,
   };
 
   // Add batch to simulation

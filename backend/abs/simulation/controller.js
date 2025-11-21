@@ -10,6 +10,7 @@ import {
   deleteSimulationBatch,
   moveSimulationBatch,
   addSimulationBatch,
+  autoRemoveExcessBatches,
   calculateSuggestedBatches,
   createCateringOrder,
   approveCateringOrder,
@@ -17,6 +18,7 @@ import {
   getCateringOrders,
   setAutoApproveCatering,
 } from "./service.js";
+import { runHeadlessSimulation } from "./headlessRunner.js";
 
 /**
  * Start a new simulation
@@ -25,6 +27,11 @@ import {
 export const startSimulationController = asyncHandler(async (req, res) => {
   const { scheduleDate, speedMultiplier, mode, forecastScale, forecastScales } =
     req.body;
+  const {
+    autoRemoveSurplusBatches = false,
+    autoRemoveIntervalMinutes,
+    autoRemoveMaxRemovals,
+  } = req.body;
 
   if (!scheduleDate) {
     return res.status(400).json({
@@ -67,6 +74,9 @@ export const startSimulationController = asyncHandler(async (req, res) => {
     speedMultiplier: speedMultiplier || 60,
     mode: mode || "manual",
     forecastScales: finalForecastScales,
+    autoRemoveSurplusBatches,
+    autoRemoveIntervalMinutes,
+    autoRemoveMaxRemovals,
   });
 
   res.status(200).json({
@@ -530,6 +540,45 @@ export const getSuggestedBatchesController = asyncHandler(async (req, res) => {
 });
 
 /**
+ * Auto-remove excess batches for a simulation
+ * POST /api/abs/simulation/:id/batch/auto-remove
+ */
+export const autoRemoveBatchesController = asyncHandler(async (req, res) => {
+  const { id } = req.params;
+  const options = req.body || {};
+
+  if (!id) {
+    return res.status(400).json({
+      success: false,
+      error: {
+        message: "Simulation ID is required",
+      },
+    });
+  }
+
+  const simulation = getSimulation(id);
+  if (!simulation) {
+    return res.status(404).json({
+      success: false,
+      error: {
+        message: "Simulation not found",
+      },
+    });
+  }
+
+  const result = await autoRemoveExcessBatches(id, options);
+
+  res.status(200).json({
+    success: true,
+    data: {
+      removed: result.removedBatches,
+      candidatesEvaluated: result.candidates.length,
+      recentEvents: simulation.events.slice(-10),
+    },
+  });
+});
+
+/**
  * Add a batch to the simulation schedule
  * POST /api/abs/simulation/:id/batch/add
  */
@@ -679,6 +728,57 @@ export const setAutoApproveCateringController = asyncHandler(
     res.status(200).json({
       success: true,
       data: result,
+    });
+  }
+);
+
+/**
+ * Run headless simulation
+ * POST /api/abs/simulation/headless/run
+ */
+export const runHeadlessSimulationController = asyncHandler(
+  async (req, res) => {
+    const {
+      scheduleDate,
+      mode = "preset",
+      suggestionMode = "predictive",
+      suggestionIntervalMinutes = 30,
+      autoAddSuggestions = true,
+      maxSuggestionsPerInterval = 3,
+      minConfidencePercent = 0,
+      condensed = true, // Default to condensed for API calls
+      autoRemoveOverstock = false,
+      maxAutoRemovalsPerInterval = 2,
+    } = req.body;
+
+    if (!scheduleDate) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: "scheduleDate is required",
+        },
+      });
+    }
+
+    const report = await runHeadlessSimulation({
+      scheduleDate,
+      mode,
+      suggestionMode,
+      suggestionIntervalMinutes,
+      autoAddSuggestions,
+      maxSuggestionsPerInterval,
+      minConfidencePercent,
+      condensed,
+      autoRemoveOverstock,
+      maxAutoRemovalsPerInterval,
+      logToConsole: false,
+      autoConnectDatabase: false, // Don't reconnect if already connected
+      closeDatabaseConnection: false, // CRITICAL: Don't close DB connection in API mode
+    });
+
+    res.status(200).json({
+      success: true,
+      data: report,
     });
   }
 );

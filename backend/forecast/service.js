@@ -9,10 +9,14 @@ import { validateDateRange } from "../shared/utils/validation.js";
 import { validateGrowthRate } from "../shared/utils/validation.js";
 import { validateInterval } from "../shared/utils/validation.js";
 import { validateIntradayInterval } from "../shared/utils/validation.js";
-import { getBusinessDayOfWeek } from "../config/timezone.js";
+import {
+  getBusinessDayOfWeek,
+  startOfBusinessDay,
+} from "../config/timezone.js";
 import { BUSINESS_HOURS } from "../config/constants.js";
 import { parseISO, addDays, format, eachDayOfInterval } from "date-fns";
 import { linearRegression } from "simple-statistics";
+import { formatMinutesToTime } from "../shared/utils/timeUtils.js";
 
 /**
  * Simple Forecast Service - Beginner-friendly approach
@@ -396,11 +400,18 @@ export async function generateForecast(params) {
   }
 
   // Get historical data
-  const forecastStart = parseISO(startDate);
-  const lookbackStart = addDays(forecastStart, -lookbackWeeks * 7);
+  // Parse dates as business timezone dates (not UTC) to ensure correct day-of-week
+  // Use startOfBusinessDay to interpret date strings as midnight in business timezone
+  const { startOfBusinessDay } = await import("../config/timezone.js");
+  const forecastStartBusiness = startOfBusinessDay(startDate);
+  const forecastEndBusiness = startOfBusinessDay(endDate);
+  const lookbackStartBusiness = startOfBusinessDay(
+    format(addDays(forecastStartBusiness, -lookbackWeeks * 7), "yyyy-MM-dd")
+  );
+
   const historicalData = await getHistoricalData(
-    lookbackStart.toISOString(),
-    forecastStart.toISOString()
+    lookbackStartBusiness.toISOString(),
+    forecastStartBusiness.toISOString()
   );
 
   if (historicalData.length === 0) {
@@ -425,11 +436,10 @@ export async function generateForecast(params) {
   const scheduledOrders = await getScheduledOrders(startDate, endDate);
 
   // Generate forecast for each day
-  // Ensure endDate is parsed consistently (parseISO creates UTC midnight)
-  const forecastEnd = parseISO(endDate);
+  // Use business timezone dates to ensure correct day-of-week calculation
   const forecastDays = eachDayOfInterval({
-    start: forecastStart,
-    end: forecastEnd,
+    start: forecastStartBusiness,
+    end: forecastEndBusiness,
   });
 
   const dailyForecast = [];
@@ -440,7 +450,8 @@ export async function generateForecast(params) {
 
     // Calculate weeks from start for trend projection
     const weeksFromStart =
-      (date.getTime() - forecastStart.getTime()) / (7 * 24 * 60 * 60 * 1000);
+      (date.getTime() - forecastStartBusiness.getTime()) /
+      (7 * 24 * 60 * 60 * 1000);
 
     Object.keys(averages).forEach((sku) => {
       // Step 1: Start with average
@@ -493,8 +504,8 @@ export async function generateForecast(params) {
   if (increment !== "day") {
     const grouped = {};
     // Track the actual forecast date range to ensure period keys stay within bounds
-    const forecastStartStr = format(forecastStart, "yyyy-MM-dd");
-    const forecastEndStr = format(forecastEnd, "yyyy-MM-dd");
+    const forecastStartStr = format(forecastStartBusiness, "yyyy-MM-dd");
+    const forecastEndStr = format(forecastEndBusiness, "yyyy-MM-dd");
 
     dailyForecast.forEach((record) => {
       let periodKey;
@@ -504,7 +515,7 @@ export async function generateForecast(params) {
         // Clamp week start to forecast range to avoid periods outside the forecast
         const weekStartStr = format(weekStart, "yyyy-MM-dd");
         if (weekStartStr < forecastStartStr) {
-          weekStart = forecastStart; // Use forecast start as the period start
+          weekStart = forecastStartBusiness; // Use forecast start as the period start
         }
         periodKey = format(weekStart, "yyyy-MM-dd");
       } else if (increment === "month") {
@@ -583,4 +594,438 @@ export async function getForecast(params) {
  */
 export async function clearForecastCache(params = null) {
   return await clearCache(params);
+}
+
+/**
+ * Compare forecast vs actual demand for a specific date
+ * @param {string} date - Date to compare (YYYY-MM-DD)
+ * @param {Object} forecastParams - Forecast parameters (growthRate, lookbackWeeks, timeIntervalMinutes)
+ * @returns {Promise<Object>} Comparison data with forecast, actual, and statistics
+ */
+export async function compareForecastVsActual(date, forecastParams = {}) {
+  const {
+    growthRate = 1.0,
+    lookbackWeeks = 4,
+    timeIntervalMinutes = 20,
+  } = forecastParams;
+
+  // Generate forecast for the date
+  const forecastData = await getForecast({
+    startDate: date,
+    endDate: date,
+    increment: "day",
+    growthRate,
+    lookbackWeeks,
+    timeIntervalMinutes,
+  });
+
+  if (
+    !forecastData.timeIntervalForecast ||
+    forecastData.timeIntervalForecast.length === 0
+  ) {
+    throw new Error(
+      "No time-interval forecast available for the specified date"
+    );
+  }
+
+  // Get actual demand from velocity repository
+  const { getIntradayVelocity } = await import("../velocity/repository.js");
+  const { getHistoricalData } = await import("./repository.js");
+
+  // Get all items that have forecast
+  const forecastItems = new Set();
+  forecastData.timeIntervalForecast.forEach((f) => {
+    if (f.itemGuid) forecastItems.add(f.itemGuid);
+  });
+
+  // Get actual demand for each item
+  const actualDataMap = new Map(); // itemGuid -> array of {timeInterval, quantity}
+
+  for (const itemGuid of forecastItems) {
+    try {
+      const actualData = await getIntradayVelocity(
+        itemGuid,
+        date,
+        timeIntervalMinutes
+      );
+
+      // Convert to map by timeInterval
+      actualData.forEach((record) => {
+        if (!actualDataMap.has(itemGuid)) {
+          actualDataMap.set(itemGuid, []);
+        }
+        actualDataMap.get(itemGuid).push({
+          timeInterval: record.timeBucket,
+          quantity: record.totalQuantity,
+          timeSlot: record.timeSlot,
+        });
+      });
+    } catch (err) {
+      // Item might not have actual data, skip it
+      console.warn(`No actual data for item ${itemGuid}:`, err.message);
+    }
+  }
+
+  // Combine forecast and actual data by item and time interval
+  const comparisonData = [];
+  const itemStats = new Map(); // itemGuid -> {forecastTotal, actualTotal, errors: []}
+
+  // Group forecast by itemGuid
+  const forecastByItem = new Map();
+  forecastData.timeIntervalForecast.forEach((f) => {
+    if (!forecastByItem.has(f.itemGuid)) {
+      forecastByItem.set(f.itemGuid, []);
+    }
+    forecastByItem.get(f.itemGuid).push(f);
+  });
+
+  // Process each item
+  forecastByItem.forEach((forecasts, itemGuid) => {
+    const actuals = actualDataMap.get(itemGuid) || [];
+    const actualMap = new Map();
+    actuals.forEach((a) => {
+      actualMap.set(a.timeInterval, a.quantity);
+    });
+
+    // Initialize stats for this item
+    let forecastTotal = 0;
+    let actualTotal = 0;
+    const errors = [];
+
+    // Process each time interval
+    forecasts.forEach((forecast) => {
+      const timeInterval = forecast.timeInterval;
+      const forecastQty = forecast.forecast || 0;
+      const actualQty = actualMap.get(timeInterval) || 0;
+
+      forecastTotal += forecastQty;
+      actualTotal += actualQty;
+
+      const error = forecastQty - actualQty;
+      const absoluteError = Math.abs(error);
+      const percentError =
+        actualQty > 0 ? (error / actualQty) * 100 : forecastQty > 0 ? 100 : 0;
+
+      errors.push({
+        timeInterval,
+        error,
+        absoluteError,
+        percentError,
+      });
+
+      comparisonData.push({
+        itemGuid: forecast.itemGuid,
+        displayName: forecast.displayName,
+        date: forecast.date,
+        timeInterval,
+        timeSlot: formatMinutesToTime(timeInterval),
+        forecast: forecastQty,
+        actual: actualQty,
+        error,
+        absoluteError,
+        percentError,
+      });
+    });
+
+    // Calculate statistics for this item
+    const meanAbsoluteError =
+      errors.length > 0
+        ? errors.reduce((sum, e) => sum + e.absoluteError, 0) / errors.length
+        : 0;
+    const rootMeanSquaredError = Math.sqrt(
+      errors.length > 0
+        ? errors.reduce((sum, e) => sum + e.error * e.error, 0) / errors.length
+        : 0
+    );
+    const meanAbsolutePercentError =
+      errors.length > 0
+        ? errors.reduce((sum, e) => sum + Math.abs(e.percentError), 0) /
+          errors.length
+        : 0;
+
+    itemStats.set(itemGuid, {
+      itemGuid,
+      displayName: forecasts[0]?.displayName,
+      forecastTotal,
+      actualTotal,
+      meanAbsoluteError,
+      rootMeanSquaredError,
+      meanAbsolutePercentError,
+      totalError: forecastTotal - actualTotal,
+      accuracy:
+        actualTotal > 0
+          ? (1 - Math.abs(forecastTotal - actualTotal) / actualTotal) * 100
+          : forecastTotal === 0
+          ? 100
+          : 0,
+    });
+  });
+
+  // Calculate overall statistics
+  const allErrors = comparisonData.map((d) => d.error);
+  const allAbsoluteErrors = comparisonData.map((d) => d.absoluteError);
+  const overallForecastTotal = Array.from(itemStats.values()).reduce(
+    (sum, s) => sum + s.forecastTotal,
+    0
+  );
+  const overallActualTotal = Array.from(itemStats.values()).reduce(
+    (sum, s) => sum + s.actualTotal,
+    0
+  );
+
+  const overallStats = {
+    totalForecast: overallForecastTotal,
+    totalActual: overallActualTotal,
+    totalError: overallForecastTotal - overallActualTotal,
+    meanAbsoluteError:
+      allAbsoluteErrors.length > 0
+        ? allAbsoluteErrors.reduce((sum, e) => sum + e, 0) /
+          allAbsoluteErrors.length
+        : 0,
+    rootMeanSquaredError: Math.sqrt(
+      allErrors.length > 0
+        ? allErrors.reduce((sum, e) => sum + e * e, 0) / allErrors.length
+        : 0
+    ),
+    meanAbsolutePercentError:
+      overallActualTotal > 0
+        ? (Math.abs(overallForecastTotal - overallActualTotal) /
+            overallActualTotal) *
+          100
+        : overallForecastTotal === 0
+        ? 0
+        : 100,
+    accuracy:
+      overallActualTotal > 0
+        ? (1 -
+            Math.abs(overallForecastTotal - overallActualTotal) /
+              overallActualTotal) *
+          100
+        : overallForecastTotal === 0
+        ? 100
+        : 0,
+    itemCount: itemStats.size,
+    intervalCount: comparisonData.length,
+  };
+
+  return {
+    date,
+    comparisonData,
+    itemStats: Array.from(itemStats.values()),
+    overallStats,
+    forecastParams: {
+      growthRate,
+      lookbackWeeks,
+      timeIntervalMinutes,
+    },
+  };
+}
+
+/**
+ * Calculate overall forecast accuracy across all available historical dates
+ * @param {Object} forecastParams - Forecast parameters (growthRate, lookbackWeeks, timeIntervalMinutes)
+ * @returns {Promise<Object>} Overall accuracy statistics across all dates
+ */
+export async function getOverallForecastAccuracy(forecastParams = {}) {
+  const {
+    growthRate = 1.0,
+    lookbackWeeks = 4,
+    timeIntervalMinutes = 20,
+  } = forecastParams;
+
+  // Get all available dates from order data
+  const { findDateRanges } = await import("../orders/repository.js");
+  const dateRanges = await findDateRanges();
+
+  if (!dateRanges || dateRanges.length === 0) {
+    throw new Error("No historical order data available");
+  }
+
+  // Extract unique dates
+  const availableDates = dateRanges.map((range) => range.startDate).sort();
+
+  // Process each date and collect statistics
+  const dateStats = [];
+  let totalForecastAcrossAllDates = 0;
+  let totalActualAcrossAllDates = 0;
+  const percentErrors = []; // Array of percent errors for each date
+
+  // Group statistics by day of week (0 = Sunday, 6 = Saturday)
+  const dayOfWeekStats = new Map();
+  const dayNames = [
+    "Sunday",
+    "Monday",
+    "Tuesday",
+    "Wednesday",
+    "Thursday",
+    "Friday",
+    "Saturday",
+  ];
+
+  for (const date of availableDates) {
+    try {
+      const comparison = await compareForecastVsActual(date, {
+        growthRate,
+        lookbackWeeks,
+        timeIntervalMinutes,
+      });
+
+      const { overallStats } = comparison;
+
+      // Get day of week for this date
+      const dayOfWeek = getBusinessDayOfWeek(date);
+      const dayName = dayNames[dayOfWeek];
+
+      // Calculate percent error for this date
+      // Percent error = (forecast - actual) / actual * 100
+      // Positive = over-forecasted, Negative = under-forecasted
+      let percentError = 0;
+      if (overallStats.totalActual > 0) {
+        percentError =
+          ((overallStats.totalForecast - overallStats.totalActual) /
+            overallStats.totalActual) *
+          100;
+      } else if (overallStats.totalForecast > 0) {
+        // If actual is 0 but forecast > 0, that's 100% error
+        percentError = 100;
+      }
+
+      percentErrors.push(percentError);
+      totalForecastAcrossAllDates += overallStats.totalForecast;
+      totalActualAcrossAllDates += overallStats.totalActual;
+
+      dateStats.push({
+        date,
+        dayOfWeek,
+        dayName,
+        forecastTotal: overallStats.totalForecast,
+        actualTotal: overallStats.totalActual,
+        percentError,
+        accuracy: overallStats.accuracy,
+      });
+
+      // Accumulate statistics by day of week
+      if (!dayOfWeekStats.has(dayOfWeek)) {
+        dayOfWeekStats.set(dayOfWeek, {
+          dayOfWeek,
+          dayName,
+          dates: [],
+          forecastTotal: 0,
+          actualTotal: 0,
+          percentErrors: [],
+        });
+      }
+
+      const dayStats = dayOfWeekStats.get(dayOfWeek);
+      dayStats.dates.push(date);
+      dayStats.forecastTotal += overallStats.totalForecast;
+      dayStats.actualTotal += overallStats.totalActual;
+      dayStats.percentErrors.push(percentError);
+    } catch (err) {
+      // Skip dates that can't be forecasted (e.g., not enough historical data)
+      console.warn(`Skipping date ${date}: ${err.message}`);
+    }
+  }
+
+  // Calculate overall statistics
+  const averagePercentError =
+    percentErrors.length > 0
+      ? percentErrors.reduce((sum, pe) => sum + pe, 0) / percentErrors.length
+      : 0;
+
+  // Overall percent error across all dates combined
+  const overallPercentError =
+    totalActualAcrossAllDates > 0
+      ? ((totalForecastAcrossAllDates - totalActualAcrossAllDates) /
+          totalActualAcrossAllDates) *
+        100
+      : totalForecastAcrossAllDates > 0
+      ? 100
+      : 0;
+
+  // Calculate standard deviation of percent errors
+  const variance =
+    percentErrors.length > 0
+      ? percentErrors.reduce(
+          (sum, pe) => sum + Math.pow(pe - averagePercentError, 2),
+          0
+        ) / percentErrors.length
+      : 0;
+  const standardDeviation = Math.sqrt(variance);
+
+  // Calculate min/max percent errors
+  const minPercentError =
+    percentErrors.length > 0 ? Math.min(...percentErrors) : 0;
+  const maxPercentError =
+    percentErrors.length > 0 ? Math.max(...percentErrors) : 0;
+
+  // Calculate statistics for each day of week
+  const dayOfWeekBreakdown = Array.from(dayOfWeekStats.values())
+    .map((dayStats) => {
+      const dayPercentErrors = dayStats.percentErrors;
+      const dayAveragePercentError =
+        dayPercentErrors.length > 0
+          ? dayPercentErrors.reduce((sum, pe) => sum + pe, 0) /
+            dayPercentErrors.length
+          : 0;
+
+      const dayOverallPercentError =
+        dayStats.actualTotal > 0
+          ? ((dayStats.forecastTotal - dayStats.actualTotal) /
+              dayStats.actualTotal) *
+            100
+          : dayStats.forecastTotal > 0
+          ? 100
+          : 0;
+
+      // Calculate standard deviation for this day
+      const dayVariance =
+        dayPercentErrors.length > 0
+          ? dayPercentErrors.reduce(
+              (sum, pe) => sum + Math.pow(pe - dayAveragePercentError, 2),
+              0
+            ) / dayPercentErrors.length
+          : 0;
+      const dayStandardDeviation = Math.sqrt(dayVariance);
+
+      return {
+        dayOfWeek: dayStats.dayOfWeek,
+        dayName: dayStats.dayName,
+        dateCount: dayStats.dates.length,
+        forecastTotal: dayStats.forecastTotal,
+        actualTotal: dayStats.actualTotal,
+        averagePercentError: dayAveragePercentError,
+        overallPercentError: dayOverallPercentError,
+        standardDeviation: dayStandardDeviation,
+        minPercentError:
+          dayPercentErrors.length > 0 ? Math.min(...dayPercentErrors) : 0,
+        maxPercentError:
+          dayPercentErrors.length > 0 ? Math.max(...dayPercentErrors) : 0,
+      };
+    })
+    .sort((a, b) => {
+      // Sort by day of week (Sunday = 0, Monday = 1, etc.)
+      // But typically we want Monday first, so adjust: Monday=1, Sunday=0 becomes Monday=0, Sunday=6
+      const aOrder = a.dayOfWeek === 0 ? 6 : a.dayOfWeek - 1;
+      const bOrder = b.dayOfWeek === 0 ? 6 : b.dayOfWeek - 1;
+      return aOrder - bOrder;
+    });
+
+  return {
+    totalDatesAnalyzed: dateStats.length,
+    totalForecastAcrossAllDates,
+    totalActualAcrossAllDates,
+    averagePercentError, // Average of individual date percent errors
+    overallPercentError, // Percent error of combined totals
+    standardDeviation,
+    minPercentError,
+    maxPercentError,
+    dateStats, // Individual date statistics
+    dayOfWeekBreakdown, // Statistics broken down by day of week
+    forecastParams: {
+      growthRate,
+      lookbackWeeks,
+      timeIntervalMinutes,
+    },
+  };
 }

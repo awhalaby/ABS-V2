@@ -10,12 +10,14 @@ import {
   deleteSimulationBatchController,
   moveSimulationBatchController,
   addSimulationBatchController,
+  autoRemoveBatchesController,
   getSuggestedBatchesController,
   createCateringOrderController,
   approveCateringOrderController,
   rejectCateringOrderController,
   getCateringOrdersController,
   setAutoApproveCateringController,
+  runHeadlessSimulationController,
 } from "./controller.js";
 import {
   purchaseItemsController,
@@ -30,6 +32,9 @@ const router = express.Router();
 
 // GET /api/abs/simulation/available-dates - Get available dates for preset mode
 router.get("/available-dates", getAvailableDatesController);
+
+// POST /api/abs/simulation/headless/run - Run headless simulation
+router.post("/headless/run", runHeadlessSimulationController);
 
 // POST /api/abs/simulation/start - Start a new simulation
 router.post("/start", startSimulationController);
@@ -64,6 +69,9 @@ router.post("/:id/batch/move", moveSimulationBatchController);
 
 // POST /api/abs/simulation/:id/batch/add - Add a new batch
 router.post("/:id/batch/add", addSimulationBatchController);
+
+// POST /api/abs/simulation/:id/batch/auto-remove - Auto-remove excess batches
+router.post("/:id/batch/auto-remove", autoRemoveBatchesController);
 
 // GET /api/abs/simulation/:id/suggested-batches - Get suggested batches
 router.get("/:id/suggested-batches", getSuggestedBatchesController);

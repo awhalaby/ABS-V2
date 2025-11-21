@@ -118,6 +118,10 @@ export const forecastAPI = {
   generate: (params) => api.post("/api/forecast/generate", params),
   getCached: (params) => api.get("/api/forecast/cached", { params }),
   clearCache: (params) => api.delete("/api/forecast/cache", { params }),
+  compareForecastVsActual: (params) =>
+    api.get("/api/forecast/compare", { params }),
+  getOverallAccuracy: (params) =>
+    api.get("/api/forecast/overall-accuracy", { params }),
 };
 
 // ABS Schedule API
@@ -175,6 +179,8 @@ export const simulationAPI = {
     api.post(`/api/abs/simulation/${id}/batch/add`, batchData),
   getSuggestedBatches: (id, params = {}) =>
     api.get(`/api/abs/simulation/${id}/suggested-batches`, { params }),
+  autoRemoveBatches: (id, options = {}) =>
+    api.post(`/api/abs/simulation/${id}/batch/auto-remove`, options),
   // Catering orders
   createCateringOrder: (id, orderData) =>
     api.post(`/api/abs/simulation/${id}/catering-order`, orderData),
@@ -188,6 +194,8 @@ export const simulationAPI = {
     api.post(`/api/abs/simulation/${id}/catering-order/auto-approve`, {
       enabled,
     }),
+  // Headless simulation
+  runHeadless: (params) => api.post("/api/abs/simulation/headless/run", params),
 };
 
 // Inventory API

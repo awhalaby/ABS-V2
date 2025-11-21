@@ -53,6 +53,8 @@ export default function SimulationPage() {
   const [bakeSpecs, setBakeSpecs] = useState([]);
   const [suggestedBatchesEnabled, setSuggestedBatchesEnabled] = useState(false);
   const [autoAddSuggestedBatches, setAutoAddSuggestedBatches] = useState(false);
+  const [autoRemoveSurplusBatches, setAutoRemoveSurplusBatches] =
+    useState(false);
   const [suggestionMode, setSuggestionMode] = useState("predictive");
   const [autoApproveCatering, setAutoApproveCatering] = useState(false);
   const [cateringOrders, setCateringOrders] = useState([]);
@@ -323,6 +325,8 @@ export default function SimulationPage() {
           afternoon: forecastScales.afternoon / 100,
           evening: forecastScales.evening / 100,
         },
+        autoRemoveSurplusBatches,
+        autoRemoveIntervalMinutes: 10,
       });
       setSimulationId(response.data.id);
       setSimulation(response.data);
@@ -939,6 +943,19 @@ export default function SimulationPage() {
                     />
                     <span className="text-sm text-gray-700">
                       Auto-add suggestions to schedule
+                    </span>
+                  </label>
+                  <label className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="checkbox"
+                      checked={autoRemoveSurplusBatches}
+                      onChange={(e) =>
+                        setAutoRemoveSurplusBatches(e.target.checked)
+                      }
+                      className="touch-input w-5 h-5"
+                    />
+                    <span className="text-sm text-gray-700">
+                      Auto-remove surplus schedule batches
                     </span>
                   </label>
                   <div className="flex flex-col md:col-span-2 gap-1">
