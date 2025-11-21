@@ -118,6 +118,10 @@ export const forecastAPI = {
   generate: (params) => api.post("/api/forecast/generate", params),
   getCached: (params) => api.get("/api/forecast/cached", { params }),
   clearCache: (params) => api.delete("/api/forecast/cache", { params }),
+  compareForecastVsActual: (params) =>
+    api.get("/api/forecast/compare", { params }),
+  getOverallAccuracy: (params) =>
+    api.get("/api/forecast/overall-accuracy", { params }),
 };
 
 // ABS Schedule API

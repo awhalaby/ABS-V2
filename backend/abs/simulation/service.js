@@ -1024,49 +1024,43 @@ export async function addSimulationBatch(simulationId, batchData) {
     "ceil"
   );
 
-  // Find an available rack at this time
-  // Check all racks to find one that's free
+  // Find an available rack/time slot using full overlap checks instead of a simple
+  // "busy until latest end time" heuristic so we can use gaps in the schedule.
   const allBatches = [
     ...(simulation.batches || []),
     ...(simulation.completedBatches || []),
   ];
-  const rackEndTimes = initializeRackEndTimes();
-  calculateRackEndTimes(allBatches, rackEndTimes);
 
-  // Find the first available rack at the requested time
-  let selectedRack = null;
-  let actualStartMinutes = roundedStartMinutes;
+  /**
+   * Check if a given rack has any batch that overlaps with the candidate window.
+   */
+  function rackHasConflict(rack, candidateStart, candidateEnd) {
+    return allBatches.some((b) => {
+      if (!b.rackPosition || b.rackPosition !== rack) return false;
+      if (!b.startTime || !b.endTime) return false;
 
-  for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-    const rackEndTime = rackEndTimes.get(rack) || 0;
-    const rackOven = getOvenFromRack(rack);
+      const bStart = parseTimeToMinutes(b.startTime);
+      const bEnd = parseTimeToMinutes(b.endTime);
 
-    // Check oven requirement
-    if (
-      batchData.oven !== null &&
-      batchData.oven !== undefined &&
-      batchData.oven !== rackOven
-    ) {
-      continue;
-    }
-
-    // Check if rack is available at the rounded start time
-    if (rackEndTime <= roundedStartMinutes) {
-      selectedRack = rack;
-      break;
-    }
+      return batchesOverlap(candidateStart, candidateEnd, bStart, bEnd);
+    });
   }
 
-  // If no rack available at requested time, find the next available time slot
-  if (!selectedRack) {
-    let earliestAvailableTime = Infinity;
-    let earliestRack = null;
+  /**
+   * Try to find a rack that is free for the given start time.
+   */
+  function findRackAtTime(candidateStart) {
+    const candidateEnd = candidateStart + batchData.bakeTime;
+
+    // Must finish within business hours
+    if (candidateEnd > BUSINESS_HOURS.END_MINUTES) {
+      return null;
+    }
 
     for (let rack = 1; rack <= OVEN_CONFIG.TOTAL_RACKS; rack++) {
-      const rackEndTime = rackEndTimes.get(rack) || 0;
       const rackOven = getOvenFromRack(rack);
 
-      // Check oven requirement
+      // Respect oven requirement
       if (
         batchData.oven !== null &&
         batchData.oven !== undefined &&
@@ -1075,39 +1069,44 @@ export async function addSimulationBatch(simulationId, batchData) {
         continue;
       }
 
-      // Find when this rack becomes available
-      const availableTime = rackEndTime;
-      if (availableTime < earliestAvailableTime) {
-        earliestAvailableTime = availableTime;
-        earliestRack = rack;
+      // Skip racks that have overlapping batches at this time
+      if (rackHasConflict(rack, candidateStart, candidateEnd)) {
+        continue;
       }
+
+      return { rack, start: candidateStart, end: candidateEnd };
     }
 
-    if (!earliestRack) {
-      throw new Error(
-        "No available rack found (all racks may be restricted by oven requirements)"
-      );
-    }
+    return null;
+  }
 
-    // Round the earliest available time to the next 20-minute increment
-    actualStartMinutes = roundToTwentyMinuteIncrement(
-      earliestAvailableTime,
-      "ceil"
-    );
-    selectedRack = earliestRack;
+  // First try at the requested (rounded) start time
+  let allocation = findRackAtTime(roundedStartMinutes);
 
-    // Verify the new time doesn't exceed business hours
-    const newEndMinutes = actualStartMinutes + batchData.bakeTime;
-    if (newEndMinutes > BUSINESS_HOURS.END_MINUTES) {
-      throw new Error("No available time slot found before business hours end");
+  // If no rack available at the requested time, search forward in 20-minute increments
+  if (!allocation) {
+    const latestStart = BUSINESS_HOURS.END_MINUTES - batchData.bakeTime;
+    let searchStart = roundedStartMinutes + 20;
+
+    while (!allocation && searchStart <= latestStart) {
+      // Ensure we're aligned to 20-minute slots
+      const alignedStart = roundToTwentyMinuteIncrement(searchStart, "ceil");
+      if (alignedStart > latestStart) break;
+
+      allocation = findRackAtTime(alignedStart);
+      searchStart = alignedStart + 20;
     }
   }
 
-  // Calculate end time based on actual start time
-  const endMinutes = actualStartMinutes + batchData.bakeTime;
-  if (endMinutes > BUSINESS_HOURS.END_MINUTES) {
-    throw new Error("Batch would end after business hours");
+  if (!allocation) {
+    throw new Error("No available time slot found before business hours end");
   }
+
+  const {
+    rack: selectedRack,
+    start: actualStartMinutes,
+    end: endMinutes,
+  } = allocation;
 
   const selectedOven = getOvenFromRack(selectedRack);
 

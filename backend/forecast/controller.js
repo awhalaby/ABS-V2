@@ -1,4 +1,9 @@
-import { getForecast, clearForecastCache } from "./service.js";
+import {
+  getForecast,
+  clearForecastCache,
+  compareForecastVsActual,
+  getOverallForecastAccuracy,
+} from "./service.js";
 import { asyncHandler } from "../shared/middleware/errorHandler.js";
 
 /**
@@ -100,3 +105,62 @@ export const clearCacheController = asyncHandler(async (req, res) => {
     deletedCount: result.deletedCount,
   });
 });
+
+/**
+ * Compare forecast vs actual demand
+ * GET /api/forecast/compare
+ */
+export const compareForecastVsActualController = asyncHandler(
+  async (req, res) => {
+    const { date, growthRate, lookbackWeeks, timeIntervalMinutes } = req.query;
+
+    if (!date) {
+      return res.status(400).json({
+        success: false,
+        error: {
+          message: "date query parameter is required",
+        },
+      });
+    }
+
+    const forecastParams = {
+      growthRate: growthRate ? Number(growthRate) : 1.0,
+      lookbackWeeks: lookbackWeeks ? Number(lookbackWeeks) : 4,
+      timeIntervalMinutes: timeIntervalMinutes
+        ? Number(timeIntervalMinutes)
+        : 20,
+    };
+
+    const comparison = await compareForecastVsActual(date, forecastParams);
+
+    res.status(200).json({
+      success: true,
+      data: comparison,
+    });
+  }
+);
+
+/**
+ * Get overall forecast accuracy across all historical dates
+ * GET /api/forecast/overall-accuracy
+ */
+export const getOverallForecastAccuracyController = asyncHandler(
+  async (req, res) => {
+    const { growthRate, lookbackWeeks, timeIntervalMinutes } = req.query;
+
+    const forecastParams = {
+      growthRate: growthRate ? Number(growthRate) : 1.0,
+      lookbackWeeks: lookbackWeeks ? Number(lookbackWeeks) : 4,
+      timeIntervalMinutes: timeIntervalMinutes
+        ? Number(timeIntervalMinutes)
+        : 20,
+    };
+
+    const accuracy = await getOverallForecastAccuracy(forecastParams);
+
+    res.status(200).json({
+      success: true,
+      data: accuracy,
+    });
+  }
+);
