@@ -21,6 +21,9 @@ export default function HeadlessSimulationPage() {
   const [autoAddSuggestions, setAutoAddSuggestions] = useState(true);
   const [maxSuggestionsPerInterval, setMaxSuggestionsPerInterval] = useState(3);
   const [minConfidencePercent, setMinConfidencePercent] = useState(0);
+  const [autoRemoveOverstock, setAutoRemoveOverstock] = useState(false);
+  const [maxAutoRemovalsPerInterval, setMaxAutoRemovalsPerInterval] =
+    useState(2);
   const [condensed, setCondensed] = useState(true);
 
   const handleRunSimulation = async () => {
@@ -38,6 +41,8 @@ export default function HeadlessSimulationPage() {
         maxSuggestionsPerInterval,
         minConfidencePercent,
         condensed,
+        autoRemoveOverstock,
+        maxAutoRemovalsPerInterval,
       });
       // API returns { success: true, data: report }
       // axios interceptor returns response.data, so result is { success: true, data: report }
@@ -146,6 +151,22 @@ export default function HeadlessSimulationPage() {
               <div className="flex items-center">
                 <input
                   type="checkbox"
+                  id="autoRemove"
+                  checked={autoRemoveOverstock}
+                  onChange={(e) => setAutoRemoveOverstock(e.target.checked)}
+                  className="h-4 w-4 text-blue-600 focus:ring-blue-500 border-gray-300 rounded"
+                />
+                <label
+                  htmlFor="autoRemove"
+                  className="ml-2 block text-sm text-gray-700"
+                >
+                  Auto-remove surplus schedule batches
+                </label>
+              </div>
+
+              <div className="flex items-center">
+                <input
+                  type="checkbox"
                   id="condensed"
                   checked={condensed}
                   onChange={(e) => setCondensed(e.target.checked)}
@@ -193,6 +214,24 @@ export default function HeadlessSimulationPage() {
                     />
                   </div>
                 </>
+              )}
+
+              {autoRemoveOverstock && (
+                <div>
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Max Auto Removals Per Interval
+                  </label>
+                  <input
+                    type="number"
+                    min="1"
+                    max="10"
+                    value={maxAutoRemovalsPerInterval}
+                    onChange={(e) =>
+                      setMaxAutoRemovalsPerInterval(Number(e.target.value))
+                    }
+                    className="w-full px-3 py-2 border border-gray-300 rounded-md shadow-sm focus:outline-none focus:ring-blue-500 focus:border-blue-500"
+                  />
+                </div>
               )}
 
               <button
@@ -353,6 +392,47 @@ function SimulationReport({ report }) {
                   <span className="text-gray-600">
                     {batch.requestedAt} → {batch.startTime} | Rack{" "}
                     {batch.rackPosition} | x{batch.quantity}
+                  </span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+      </section>
+
+      {/* Auto-Removed Batches */}
+      <section>
+        <h3 className="text-lg font-semibold text-gray-900 mb-3">
+          Auto-Removed Batches
+        </h3>
+        {!report.removedBatches || report.removedBatches.length === 0 ? (
+          <p className="text-gray-500 text-sm">(none)</p>
+        ) : (
+          <div className="bg-red-50 rounded-md p-4">
+            <div className="space-y-2">
+              {report.removedBatches.map((batch, idx) => (
+                <div
+                  key={`${batch.batchId || idx}-${idx}`}
+                  className="flex items-start justify-between text-sm"
+                >
+                  <div>
+                    <span className="font-medium">
+                      {batch.displayName || batch.itemGuid}
+                    </span>
+                    {batch.reason?.type && (
+                      <span className="ml-2 text-xs uppercase tracking-wide text-red-600">
+                        {batch.reason.type.replace(/_/g, " ")}
+                      </span>
+                    )}
+                    {batch.reason?.surplus !== undefined && (
+                      <span className="ml-2 text-xs text-gray-500">
+                        Surplus: {Math.round(batch.reason.surplus)}
+                      </span>
+                    )}
+                  </div>
+                  <span className="text-gray-600">
+                    {batch.startTime} | Rack {batch.rackPosition || "?"} | x
+                    {batch.quantity}
                   </span>
                 </div>
               ))}

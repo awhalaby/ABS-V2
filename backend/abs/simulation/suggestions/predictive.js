@@ -10,6 +10,67 @@ import { getBakeSpecs } from "../../repository.js";
  */
 const CONFIDENCE_TARGET_UNITS = 50;
 
+async function buildPredictiveContext(simulation) {
+  const currentTime = simulation.currentTime;
+  const timeIntervalForecast = simulation.timeIntervalForecast || [];
+  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
+  const processedOrdersMap =
+    processedOrdersRaw instanceof Map
+      ? processedOrdersRaw
+      : new Map(
+          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
+            (item) => [item.itemGuid, item]
+          )
+        );
+  const inventory =
+    simulation.inventory instanceof Map ? simulation.inventory : new Map();
+
+  let bakeSpecMap =
+    simulation.bakeSpecMap instanceof Map ? simulation.bakeSpecMap : null;
+  if (!bakeSpecMap || bakeSpecMap.size === 0) {
+    const bakeSpecs = await getBakeSpecs();
+    bakeSpecMap = new Map();
+    bakeSpecs.forEach((spec) => {
+      bakeSpecMap.set(spec.itemGuid, spec);
+    });
+    simulation.bakeSpecMap = bakeSpecMap;
+  }
+
+  const forecastByItem = new Map();
+  timeIntervalForecast.forEach((forecast) => {
+    const itemGuid = forecast.itemGuid;
+    if (!itemGuid) return;
+
+    if (!forecastByItem.has(itemGuid)) {
+      forecastByItem.set(itemGuid, []);
+    }
+    forecastByItem.get(itemGuid).push(forecast);
+  });
+
+  return {
+    currentTime,
+    processedOrdersMap,
+    inventory,
+    bakeSpecMap,
+    forecastByItem,
+  };
+}
+
+function calculateConsumptionRatios(actualQuantity, expectedQuantity) {
+  const rawRatio =
+    expectedQuantity > 0
+      ? actualQuantity / expectedQuantity
+      : actualQuantity > 0
+      ? 1.5
+      : 1.0;
+  const adjustedRatio = Math.min(1.5, Math.max(0.5, rawRatio));
+
+  return {
+    rawRatio,
+    adjustedRatio,
+  };
+}
+
 /**
  * Round minutes to nearest 20-minute increment
  * @param {number} minutes - Minutes to round
@@ -31,38 +92,13 @@ function roundToTwentyMinuteIncrement(minutes, mode = "ceil") {
  */
 export async function calculatePredictiveSuggestedBatches(simulation) {
   const suggestedBatches = [];
-  const currentTime = simulation.currentTime;
-  const timeIntervalForecast = simulation.timeIntervalForecast || [];
-  // Handle both Map and Array formats for processedOrdersByItem
-  const processedOrdersRaw = simulation.processedOrdersByItem || new Map();
-  const processedOrdersMap =
-    processedOrdersRaw instanceof Map
-      ? processedOrdersRaw
-      : new Map(
-          (Array.isArray(processedOrdersRaw) ? processedOrdersRaw : []).map(
-            (item) => [item.itemGuid, item]
-          )
-        );
-  const inventory = simulation.inventory || new Map();
-
-  // Get bake specs for all items
-  const bakeSpecs = await getBakeSpecs();
-  const bakeSpecMap = new Map();
-  bakeSpecs.forEach((spec) => {
-    bakeSpecMap.set(spec.itemGuid, spec);
-  });
-
-  // Group forecast by itemGuid and time interval
-  const forecastByItem = new Map();
-  timeIntervalForecast.forEach((forecast) => {
-    const itemGuid = forecast.itemGuid;
-    if (!itemGuid) return;
-
-    if (!forecastByItem.has(itemGuid)) {
-      forecastByItem.set(itemGuid, []);
-    }
-    forecastByItem.get(itemGuid).push(forecast);
-  });
+  const {
+    currentTime,
+    processedOrdersMap,
+    inventory,
+    bakeSpecMap,
+    forecastByItem,
+  } = await buildPredictiveContext(simulation);
 
   // Process each item that has forecast data
   forecastByItem.forEach((itemForecast, itemGuid) => {
@@ -101,20 +137,14 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
 
     // Calculate consumption rate (actual vs expected)
     // If we've consumed more than expected, adjust the remaining forecast
-    const consumptionRatio =
-      expectedQuantity > 0
-        ? actualQuantity / expectedQuantity
-        : actualQuantity > 0
-        ? 1.5
-        : 1.0; // If no expected but we have actual, assume 1.5x
-    const adjustedConsumptionRatio = Math.min(
-      1.5,
-      Math.max(0.5, consumptionRatio)
+    const { rawRatio, adjustedRatio } = calculateConsumptionRatios(
+      actualQuantity,
+      expectedQuantity
     );
+    const consumptionRatio = adjustedRatio;
 
     // Projected remaining demand based on consumption rate
-    const projectedRemainingDemand =
-      remainingExpected * adjustedConsumptionRatio;
+    const projectedRemainingDemand = remainingExpected * consumptionRatio;
 
     // Calculate total needed: projected remaining demand + safety buffer
     const restockThreshold = bakeSpec.restockThreshold || 20;
@@ -242,6 +272,7 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
               shortfall,
               parMax,
               consumptionRatio: Math.round(consumptionRatio * 100) / 100,
+              rawConsumptionRatio: Math.round(rawRatio * 100) / 100,
               confidencePercent,
               confidenceDetails: {
                 expectedUnitsObserved: expectedQuantity,
@@ -259,4 +290,134 @@ export async function calculatePredictiveSuggestedBatches(simulation) {
   });
 
   return suggestedBatches;
+}
+
+/**
+ * Calculate removal candidates (inverse of predictive suggestions)
+ * @param {Object} simulation - Simulation state object
+ * @param {Object} options - Optional overrides
+ * @returns {Promise<Array>} Array of removal candidate objects
+ */
+export async function calculatePredictiveRemovalCandidates(
+  simulation,
+  options = {}
+) {
+  const removalCandidates = [];
+  const {
+    currentTime,
+    processedOrdersMap,
+    inventory,
+    bakeSpecMap,
+    forecastByItem,
+  } = await buildPredictiveContext(simulation);
+
+  const scheduledBatches = Array.isArray(simulation.batches)
+    ? simulation.batches
+    : [];
+
+  forecastByItem.forEach((itemForecast, itemGuid) => {
+    const bakeSpec = bakeSpecMap.get(itemGuid);
+    if (!bakeSpec) return;
+
+    const processedItem = processedOrdersMap.get(itemGuid);
+    const actualQuantity = processedItem?.totalQuantity || 0;
+
+    let expectedQuantity = 0;
+    let remainingExpected = 0;
+    itemForecast.forEach((forecast) => {
+      if (forecast.timeInterval <= currentTime) {
+        expectedQuantity += forecast.forecast || 0;
+      } else {
+        remainingExpected += forecast.forecast || 0;
+      }
+    });
+
+    const currentInventory = inventory.get(itemGuid) || 0;
+    const parMax =
+      bakeSpec.parMax !== null && bakeSpec.parMax !== undefined
+        ? bakeSpec.parMax
+        : null;
+    const { rawRatio, adjustedRatio } = calculateConsumptionRatios(
+      actualQuantity,
+      expectedQuantity
+    );
+    const consumptionRatio = adjustedRatio;
+    const projectedRemainingDemand = remainingExpected * consumptionRatio;
+    const restockThreshold = bakeSpec.restockThreshold || 20;
+    const totalNeeded = projectedRemainingDemand + restockThreshold;
+
+    let futureInventory = currentInventory;
+    const allBatches = [
+      ...(simulation.batches || []),
+      ...(simulation.completedBatches || []),
+    ];
+    allBatches.forEach((batch) => {
+      if (batch.itemGuid === itemGuid && batch.availableTime) {
+        const availableTime = parseTimeToMinutes(batch.availableTime);
+        if (availableTime > currentTime && batch.status !== "available") {
+          futureInventory += batch.quantity || 0;
+        }
+      }
+    });
+
+    const surplus = Math.max(0, futureInventory - totalNeeded);
+    const removalThreshold =
+      options.removalThreshold ?? Math.max(5, Math.round(restockThreshold / 2));
+    let removableSurplus = surplus - removalThreshold;
+
+    if (removableSurplus <= 0) {
+      return;
+    }
+
+    const removableBatches = scheduledBatches
+      .filter((batch) => batch.itemGuid === itemGuid)
+      .filter((batch) => batch.origin === "schedule")
+      .filter((batch) => batch.status === "scheduled")
+      .filter((batch) => {
+        const startMinutes = parseTimeToMinutes(batch.startTime);
+        return startMinutes > currentTime;
+      })
+      .sort(
+        (a, b) =>
+          parseTimeToMinutes(b.startTime) - parseTimeToMinutes(a.startTime)
+      );
+
+    removableBatches.forEach((batch) => {
+      if (removableSurplus <= 0) {
+        return;
+      }
+      const batchQuantity = batch.quantity || bakeSpec.capacityPerRack || 0;
+      if (batchQuantity <= 0) {
+        return;
+      }
+      removalCandidates.push({
+        batchId: batch.batchId,
+        itemGuid,
+        displayName: batch.displayName || bakeSpec.displayName || itemGuid,
+        quantity: batch.quantity,
+        startTime: batch.startTime,
+        rackPosition: batch.rackPosition,
+        origin: batch.origin,
+        reason: {
+          algorithm: "predictive",
+          type: "excess_inventory",
+          actualQuantity,
+          expectedQuantity,
+          currentInventory,
+          futureInventory,
+          projectedRemainingDemand,
+          totalNeeded,
+          restockThreshold,
+          parMax,
+          surplus,
+          removalThreshold,
+          consumptionRatio: Math.round(consumptionRatio * 100) / 100,
+          rawConsumptionRatio: Math.round(rawRatio * 100) / 100,
+        },
+      });
+      removableSurplus -= batchQuantity;
+    });
+  });
+
+  return removalCandidates;
 }

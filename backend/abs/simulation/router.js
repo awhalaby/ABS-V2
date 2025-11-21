@@ -10,6 +10,7 @@ import {
   deleteSimulationBatchController,
   moveSimulationBatchController,
   addSimulationBatchController,
+  autoRemoveBatchesController,
   getSuggestedBatchesController,
   createCateringOrderController,
   approveCateringOrderController,
@@ -68,6 +69,9 @@ router.post("/:id/batch/move", moveSimulationBatchController);
 
 // POST /api/abs/simulation/:id/batch/add - Add a new batch
 router.post("/:id/batch/add", addSimulationBatchController);
+
+// POST /api/abs/simulation/:id/batch/auto-remove - Auto-remove excess batches
+router.post("/:id/batch/auto-remove", autoRemoveBatchesController);
 
 // GET /api/abs/simulation/:id/suggested-batches - Get suggested batches
 router.get("/:id/suggested-batches", getSuggestedBatchesController);

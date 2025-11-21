@@ -15,7 +15,10 @@ import { getOrdersByDateRange } from "../../orders/repository.js";
 import { toBusinessTime } from "../../config/timezone.js";
 import { generateSchedule, getDefaultScheduleParams } from "../service.js";
 import { getForecast } from "../../forecast/service.js";
-import { calculatePredictiveSuggestedBatches } from "./suggestions/predictive.js";
+import {
+  calculatePredictiveSuggestedBatches,
+  calculatePredictiveRemovalCandidates,
+} from "./suggestions/predictive.js";
 import { calculateReactiveSuggestedBatches } from "./suggestions/reactive.js";
 
 /**
@@ -24,6 +27,9 @@ import { calculateReactiveSuggestedBatches } from "./suggestions/reactive.js";
 
 // Active simulations storage (in production, use Redis or database)
 const activeSimulations = new Map();
+
+const AUTO_REMOVAL_DEFAULT_INTERVAL = 10; // minutes
+const AUTO_REMOVAL_DEFAULT_MAX = 2;
 
 /**
  * Helper functions for batch scheduling operations
@@ -132,6 +138,25 @@ export class SimulationState {
     // Legacy inventory count for compatibility (derived from inventoryUnits)
     this.inventory = new Map(); // itemGuid -> quantity (computed from inventoryUnits)
 
+    // Cached bake specs map for predictive calculations
+    this.bakeSpecMap = null;
+
+    // Auto-removal configuration
+    this.autoRemoveSurplusBatches = Boolean(config.autoRemoveSurplusBatches);
+    const intervalValue = Number(config.autoRemoveIntervalMinutes);
+    this.autoRemoveIntervalMinutes =
+      Number.isFinite(intervalValue) && intervalValue > 0
+        ? intervalValue
+        : AUTO_REMOVAL_DEFAULT_INTERVAL;
+    const maxRemovalValue = Number(config.autoRemoveMaxRemovals);
+    this.autoRemoveMaxRemovals =
+      Number.isFinite(maxRemovalValue) && maxRemovalValue > 0
+        ? maxRemovalValue
+        : AUTO_REMOVAL_DEFAULT_MAX;
+    this.lastAutoRemovalCheck = BUSINESS_HOURS.START_MINUTES;
+    this.autoRemoveInFlight = false;
+    this.autoRemovalRuns = [];
+
     // Batch tracking
     this.batches = [];
     this.completedBatches = [];
@@ -215,6 +240,9 @@ export async function startSimulation(config) {
     speedMultiplier = 60,
     mode = "manual",
     forecastScales = null,
+    autoRemoveSurplusBatches = false,
+    autoRemoveIntervalMinutes = AUTO_REMOVAL_DEFAULT_INTERVAL,
+    autoRemoveMaxRemovals = AUTO_REMOVAL_DEFAULT_MAX,
   } = config;
 
   if (!scheduleDate) {
@@ -383,6 +411,9 @@ export async function startSimulation(config) {
     speedMultiplier,
     mode,
     presetOrders,
+    autoRemoveSurplusBatches,
+    autoRemoveIntervalMinutes,
+    autoRemoveMaxRemovals,
   });
 
   // Sum total item quantities (not count of records)
@@ -407,6 +438,7 @@ export async function startSimulation(config) {
     startedAt: null,
     pulledAt: null,
     availableAt: null,
+    origin: batch.origin || "schedule",
   }));
 
   // Sort batches by start time
@@ -445,6 +477,41 @@ export function updateSimulation(simulationId) {
     simulation.currentTime = BUSINESS_HOURS.END_MINUTES;
     simulation.addEvent("simulation_completed", "Simulation completed");
     return simulation;
+  }
+
+  // Auto-remove surplus batches on interval if enabled
+  if (
+    simulation.autoRemoveSurplusBatches &&
+    !simulation.autoRemoveInFlight &&
+    simulation.status === "running"
+  ) {
+    const intervalMinutes =
+      simulation.autoRemoveIntervalMinutes || AUTO_REMOVAL_DEFAULT_INTERVAL;
+    const lastCheck =
+      simulation.lastAutoRemovalCheck ?? BUSINESS_HOURS.START_MINUTES;
+    if (
+      Number.isFinite(simulation.currentTime) &&
+      simulation.currentTime - lastCheck >= intervalMinutes
+    ) {
+      simulation.lastAutoRemovalCheck = simulation.currentTime;
+      simulation.autoRemoveInFlight = true;
+      autoRemoveExcessBatches(simulation.id, {
+        maxRemovals: simulation.autoRemoveMaxRemovals,
+      })
+        .catch((error) => {
+          console.error("Auto-removal execution failed:", error);
+          simulation.addEvent(
+            "batch_auto_remove_error",
+            `Auto-removal run failed: ${error.message || error}`,
+            {
+              error: error?.message || String(error),
+            }
+          );
+        })
+        .finally(() => {
+          simulation.autoRemoveInFlight = false;
+        });
+    }
   }
 
   // Process batches
@@ -829,6 +896,104 @@ export async function calculateSuggestedBatches(simulationId, options = {}) {
 }
 
 /**
+ * Automatically remove excess scheduled batches using predictive surplus logic
+ * @param {string} simulationId - Simulation ID
+ * @param {Object} options - Options object
+ * @param {string} options.mode - Algorithm mode (currently supports 'predictive')
+ * @param {number} options.maxRemovals - Max batches to remove in a single run
+ * @returns {Promise<Object>} Result summary
+ */
+export async function autoRemoveExcessBatches(simulationId, options = {}) {
+  const simulation = activeSimulations.get(simulationId);
+  if (!simulation) {
+    return { removedBatches: [], candidates: [] };
+  }
+
+  const mode =
+    typeof options.mode === "string"
+      ? options.mode.toLowerCase()
+      : "predictive";
+
+  if (mode !== "predictive") {
+    return { removedBatches: [], candidates: [] };
+  }
+
+  const candidates = await calculatePredictiveRemovalCandidates(
+    simulation,
+    options
+  );
+
+  const runTimestamp = Number.isFinite(simulation.currentTime)
+    ? simulation.currentTime
+    : BUSINESS_HOURS.START_MINUTES;
+  const runEntry = {
+    atMinutes: simulation.currentTime ?? null,
+    atTime: formatMinutesToTime(runTimestamp),
+    evaluated: candidates.length,
+    removed: [],
+  };
+
+  const maxRemovals = Number.isFinite(options.maxRemovals)
+    ? Math.max(0, options.maxRemovals)
+    : 3;
+
+  const removedBatches = [];
+  for (const candidate of candidates) {
+    if (removedBatches.length >= maxRemovals) {
+      break;
+    }
+
+    try {
+      const updatedSimulation = await deleteSimulationBatch(
+        simulationId,
+        candidate.batchId
+      );
+
+      if (updatedSimulation) {
+        updatedSimulation.addEvent(
+          "batch_auto_removed",
+          `Auto-removed batch: ${candidate.displayName || candidate.itemGuid}`,
+          {
+            batchId: candidate.batchId,
+            itemGuid: candidate.itemGuid,
+            reason: candidate.reason,
+            quantity: candidate.quantity,
+            startTime: candidate.startTime,
+            rackPosition: candidate.rackPosition,
+            origin: candidate.origin,
+          }
+        );
+      }
+
+      removedBatches.push(candidate);
+      runEntry.removed.push({
+        batchId: candidate.batchId,
+        itemGuid: candidate.itemGuid,
+        displayName: candidate.displayName,
+        quantity: candidate.quantity,
+        startTime: candidate.startTime,
+        reason: candidate.reason,
+      });
+    } catch (error) {
+      console.error("Failed to auto-remove batch:", error);
+      simulation.addEvent(
+        "batch_auto_remove_error",
+        `Failed to auto-remove batch ${candidate.batchId}: ${error.message}`,
+        {
+          batchId: candidate.batchId,
+          error: error.message,
+        }
+      );
+    }
+  }
+
+  simulation.autoRemovalRuns = simulation.autoRemovalRuns || [];
+  simulation.autoRemovalRuns.push(runEntry);
+
+  return { removedBatches, candidates };
+}
+
+/**
  * Add a new batch to the simulation schedule
  * @param {string} simulationId - Simulation ID
  * @param {Object} batchData - Batch data (from suggested batch)
@@ -946,6 +1111,14 @@ export async function addSimulationBatch(simulationId, batchData) {
 
   const selectedOven = getOvenFromRack(selectedRack);
 
+  const origin =
+    typeof batchData.origin === "string" && batchData.origin.trim().length > 0
+      ? batchData.origin.trim()
+      : typeof batchData.algorithm === "string" &&
+        batchData.algorithm.trim().length > 0
+      ? batchData.algorithm.trim()
+      : "manual";
+
   // Create new batch object
   const newBatch = {
     batchId,
@@ -965,6 +1138,7 @@ export async function addSimulationBatch(simulationId, batchData) {
     startedAt: null,
     pulledAt: null,
     availableAt: null,
+    origin,
   };
 
   // Add batch to simulation

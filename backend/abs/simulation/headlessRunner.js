@@ -17,6 +17,7 @@ dotenv.config();
 
 const DEFAULT_INTERVAL_MINUTES = 30;
 const DEFAULT_MAX_SUGGESTIONS = 3;
+const DEFAULT_MAX_AUTO_REMOVALS = 2;
 const DEFAULT_MONGODB_URI =
   process.env.MONGODB_URI || "mongodb://localhost:27017/bakehouse";
 let databaseReady = false;
@@ -376,7 +377,9 @@ export async function runHeadlessSimulation(options = {}) {
     suggestionMode = "predictive",
     suggestionIntervalMinutes = DEFAULT_INTERVAL_MINUTES,
     autoAddSuggestions = true,
+    autoRemoveOverstock = false,
     maxSuggestionsPerInterval = DEFAULT_MAX_SUGGESTIONS,
+    maxAutoRemovalsPerInterval = DEFAULT_MAX_AUTO_REMOVALS,
     minConfidencePercent = 0,
     logToConsole = true,
     autoConnectDatabase = true,
@@ -393,10 +396,15 @@ export async function runHeadlessSimulation(options = {}) {
     await ensureDatabaseConnection(mongodbUri);
   }
 
+  const intervalMinutes = validateInterval(suggestionIntervalMinutes);
+
   const simulation = await startSimulation({
     scheduleDate,
     mode,
     speedMultiplier: 60,
+    autoRemoveSurplusBatches: autoRemoveOverstock,
+    autoRemoveIntervalMinutes: intervalMinutes,
+    autoRemoveMaxRemovals: maxAutoRemovalsPerInterval,
   });
 
   const report = {
@@ -416,7 +424,6 @@ export async function runHeadlessSimulation(options = {}) {
 
   report.inventorySnapshots.push(captureInventorySnapshot(simulation));
 
-  const intervalMinutes = validateInterval(suggestionIntervalMinutes);
   const endMinutes = BUSINESS_HOURS.END_MINUTES;
 
   while (
@@ -457,6 +464,10 @@ export async function runHeadlessSimulation(options = {}) {
   report.stats = finalState.stats;
   report.events = finalState.events;
   report.finalInventory = captureInventorySnapshot(finalState);
+  report.autoRemovalRuns = finalState.autoRemovalRuns || [];
+  report.removedBatches = report.autoRemovalRuns.flatMap(
+    (run) => run.removed || []
+  );
 
   // Add final inventory per SKU to stats
   report.stats.finalInventoryPerItem = report.finalInventory.perItem || [];
@@ -469,6 +480,7 @@ export async function runHeadlessSimulation(options = {}) {
       simulationId: report.simulationId,
       initialBatches: report.initialBatches,
       addedBatches: report.addedBatches,
+      removedBatches: report.removedBatches,
       // Condensed inventory snapshots (only critical moments)
       inventorySnapshots: condenseInventorySnapshots(report.inventorySnapshots),
       // Condensed orders (summaries with samples)
@@ -493,6 +505,17 @@ export async function runHeadlessSimulation(options = {}) {
           quantity: a.quantity,
           startTime: a.startTime,
           algorithm: a.algorithm,
+        })),
+      })),
+      autoRemovalRuns: report.autoRemovalRuns.map((run) => ({
+        atTime: run.atTime,
+        evaluated: run.evaluated,
+        removedCount: run.removed.length,
+        removed: run.removed.map((entry) => ({
+          itemGuid: entry.itemGuid,
+          displayName: entry.displayName,
+          quantity: entry.quantity,
+          startTime: entry.startTime,
         })),
       })),
       // Metadata
@@ -537,6 +560,12 @@ function parseCliArgs(argv) {
         acc.autoAddSuggestions = false;
       } else if (arg.startsWith("--max=")) {
         acc.maxSuggestionsPerInterval = Number(arg.split("=")[1]);
+      } else if (arg === "--auto-remove") {
+        acc.autoRemoveOverstock = true;
+      } else if (arg === "--no-auto-remove") {
+        acc.autoRemoveOverstock = false;
+      } else if (arg.startsWith("--auto-remove-max=")) {
+        acc.maxAutoRemovalsPerInterval = Number(arg.split("=")[1]);
       } else if (arg.startsWith("--min-confidence=")) {
         acc.minConfidencePercent = Number(arg.split("=")[1]);
       } else if (arg.startsWith("--mongo=")) {
