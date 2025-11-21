@@ -9,7 +9,10 @@ import { validateDateRange } from "../shared/utils/validation.js";
 import { validateGrowthRate } from "../shared/utils/validation.js";
 import { validateInterval } from "../shared/utils/validation.js";
 import { validateIntradayInterval } from "../shared/utils/validation.js";
-import { getBusinessDayOfWeek, startOfBusinessDay } from "../config/timezone.js";
+import {
+  getBusinessDayOfWeek,
+  startOfBusinessDay,
+} from "../config/timezone.js";
 import { BUSINESS_HOURS } from "../config/constants.js";
 import { parseISO, addDays, format, eachDayOfInterval } from "date-fns";
 import { linearRegression } from "simple-statistics";
@@ -405,7 +408,7 @@ export async function generateForecast(params) {
   const lookbackStartBusiness = startOfBusinessDay(
     format(addDays(forecastStartBusiness, -lookbackWeeks * 7), "yyyy-MM-dd")
   );
-  
+
   const historicalData = await getHistoricalData(
     lookbackStartBusiness.toISOString(),
     forecastStartBusiness.toISOString()
@@ -447,7 +450,8 @@ export async function generateForecast(params) {
 
     // Calculate weeks from start for trend projection
     const weeksFromStart =
-      (date.getTime() - forecastStart.getTime()) / (7 * 24 * 60 * 60 * 1000);
+      (date.getTime() - forecastStartBusiness.getTime()) /
+      (7 * 24 * 60 * 60 * 1000);
 
     Object.keys(averages).forEach((sku) => {
       // Step 1: Start with average
@@ -500,8 +504,8 @@ export async function generateForecast(params) {
   if (increment !== "day") {
     const grouped = {};
     // Track the actual forecast date range to ensure period keys stay within bounds
-    const forecastStartStr = format(forecastStart, "yyyy-MM-dd");
-    const forecastEndStr = format(forecastEnd, "yyyy-MM-dd");
+    const forecastStartStr = format(forecastStartBusiness, "yyyy-MM-dd");
+    const forecastEndStr = format(forecastEndBusiness, "yyyy-MM-dd");
 
     dailyForecast.forEach((record) => {
       let periodKey;
@@ -511,7 +515,7 @@ export async function generateForecast(params) {
         // Clamp week start to forecast range to avoid periods outside the forecast
         const weekStartStr = format(weekStart, "yyyy-MM-dd");
         if (weekStartStr < forecastStartStr) {
-          weekStart = forecastStart; // Use forecast start as the period start
+          weekStart = forecastStartBusiness; // Use forecast start as the period start
         }
         periodKey = format(weekStart, "yyyy-MM-dd");
       } else if (increment === "month") {
